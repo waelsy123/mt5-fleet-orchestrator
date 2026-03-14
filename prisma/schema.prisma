@@ -1,13 +1,86 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Vps {
+  id         String    @id @default(cuid())
+  name       String
+  ip         String    @unique
+  vncIp      String?
+  vncPort    Int?
+  password   String
+  apiPort    Int       @default(8000)
+  status     VpsStatus @default(PENDING)
+  lastSeen   DateTime?
+  lastError  String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  accounts   Account[]
+  provisions ProvisionLog[]
+}
+
+model Account {
+  id         String    @id @default(cuid())
+  vpsId      String
+  login      String
+  server     String
+  broker     String?
+  balance    Float     @default(0)
+  equity     Float     @default(0)
+  freeMargin Float     @default(0)
+  profit     Float     @default(0)
+  connected  Boolean   @default(false)
+  lastSynced DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  vps        Vps       @relation(fields: [vpsId], references: [id], onDelete: Cascade)
+  snapshots  AccountSnapshot[]
+
+  @@unique([vpsId, server, login])
+}
+
+model AccountSnapshot {
+  id        String   @id @default(cuid())
+  accountId String
+  balance   Float
+  equity    Float
+  profit    Float
+  positions Int      @default(0)
+  timestamp DateTime @default(now())
+
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, timestamp])
+}
+
+model ProvisionLog {
+  id         String          @id @default(cuid())
+  vpsId      String
+  status     ProvisionStatus @default(RUNNING)
+  logs       String          @default("")
+  startedAt  DateTime        @default(now())
+  finishedAt DateTime?
+
+  vps        Vps             @relation(fields: [vpsId], references: [id], onDelete: Cascade)
+}
+
+enum VpsStatus {
+  PENDING
+  PROVISIONING
+  ONLINE
+  OFFLINE
+  ERROR
+}
+
+enum ProvisionStatus {
+  RUNNING
+  SUCCESS
+  FAILED
 }

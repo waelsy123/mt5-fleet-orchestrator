@@ -1,0 +1,62 @@
+{
+  "fivepercentonline": {
+    "name": "Five Percent Online",
+    "servers": ["FivePercentOnline-Real"],
+    "installer_url": "https://download.mql5.com/cdn/web/fivepercentonline/mt5/fivepercentonline5setup.exe"
+  },
+  "aquafunded": {
+    "name": "AquaFunded",
+    "servers": ["AquaFunded-Server"],
+    "installer_url": "https://download.mql5.com/cdn/web/aqua.funded.pty.ltd/mt5/aquafundedptyltd5setup.exe"
+  },
+  "ftmo": {
+    "name": "FTMO",
+    "servers": ["FTMO-Demo", "FTMO-Server", "FTMO-Demo2", "FTMO-Server2", "FTMO-Server3"],
+    "installer_url": "https://download.mql5.com/cdn/web/ftmo.s.r.o/mt5/ftmosro5setup.exe"
+  },
+  "fundednext": {
+    "name": "FundedNext",
+    "servers": ["FundedNext-Server", "FundedNext-Demo"],
+    "installer_url": "https://download.mql5.com/cdn/web/funded.next.ltd/mt5/fundednextltd5setup.exe"
+  },
+  "thefundedtrader": {
+    "name": "The Funded Trader",
+    "servers": ["TheFundedTrader-Server", "TheFundedTrader-Demo"],
+    "installer_url": "https://download.mql5.com/cdn/web/the.funded.trader/mt5/thefundedtrader5setup.exe"
+  },
+  "e8funding": {
+    "name": "E8 Funding",
+    "servers": ["E8-Server", "E8Funding-Server"],
+    "installer_url": "https://download.mql5.com/cdn/web/e8.funding/mt5/e8funding5setup.exe"
+  },
+  "myforexfunds": {
+    "name": "My Forex Funds",
+    "servers": ["MyForexFunds-Server", "MyForexFunds-Demo"],
+    "installer_url": "https://download.mql5.com/cdn/web/my.forex.funds/mt5/myforexfunds5setup.exe"
+  },
+  "trueforex": {
+    "name": "True Forex Funds",
+    "servers": ["TrueForexFunds-Server", "TrueForexFunds-Demo"],
+    "installer_url": "https://download.mql5.com/cdn/web/true.forex.funds/mt5/trueforexfunds5setup.exe"
+  },
+  "topstep": {
+    "name": "Topstep",
+    "servers": ["Topstep-Server", "Topstep-Demo"],
+    "installer_url": "https://download.mql5.com/cdn/web/topstep/mt5/topstep5setup.exe"
+  },
+  "alphaCapital": {
+    "name": "Alpha Capital Group",
+    "servers": ["AlphaCapitalGroup-Server", "AlphaCapitalGroup-Demo"],
+    "installer_url": "https://download.mql5.com/cdn/web/alpha.capital.group/mt5/alphacapitalgroup5setup.exe"
+  },
+  "blueberry": {
+    "name": "Blueberry Markets",
+    "servers": ["BlueberryMarkets-Live", "BlueberryMarkets-Demo"],
+    "installer_url": "https://download.mql5.com/cdn/web/blueberry.markets/mt5/blueberrymarkets5setup.exe"
+  },
+  "icmarkets": {
+    "name": "IC Markets",
+    "servers": ["ICMarketsSC-MT5", "ICMarketsSC-Demo", "ICMarketsEU-MT5"],
+    "installer_url": "https://download.mql5.com/cdn/web/international.capital.markets/mt5/icmarkets5setup.exe"
+  }
+}
