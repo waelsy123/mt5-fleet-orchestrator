@@ -17,7 +17,17 @@ export async function GET(
     const { vpsId, server, login } = await params;
     const { client } = await getClient(vpsId);
     const result = await client.getPositions(server, login);
-    return NextResponse.json(result);
+    const positions = (result.positions || []).map((p) => ({
+      ticket: String(p.pos),
+      symbol: p.symbol,
+      type: p.type,
+      volume: Number(p.volume),
+      openPrice: Number(p.price),
+      profit: Number(p.profit),
+      sl: Number(p.sl),
+      tp: Number(p.tp),
+    }));
+    return NextResponse.json(positions);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

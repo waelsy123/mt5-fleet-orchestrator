@@ -22,4 +22,4 @@ RUN npx prisma generate && npm run build
 
 EXPOSE 3000
 
-CMD ["sh", "-c", "npx prisma migrate deploy || echo 'Migration skipped (DB may not be ready)'; npm start"]
+CMD ["sh", "-c", "npx prisma migrate deploy || echo 'Migration skipped'; PORT=${PORT:-3000} npm start"]

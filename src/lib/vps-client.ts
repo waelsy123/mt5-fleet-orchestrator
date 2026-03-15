@@ -3,11 +3,12 @@ import type {
   CopierStartRequest,
   TradeRequest,
   VpsAccountInfo,
+  VpsDashboardAccount,
   VpsDashboardData,
   VpsPositions,
 } from "./types";
 
-const TIMEOUT_MS = 5000;
+const DEFAULT_TIMEOUT_MS = 5000;
 
 export class VpsClient {
   private baseUrl: string;
@@ -18,10 +19,11 @@ export class VpsClient {
 
   private async request<T = unknown>(
     path: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    timeoutMs: number = DEFAULT_TIMEOUT_MS
   ): Promise<T> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
@@ -54,10 +56,41 @@ export class VpsClient {
   }
 
   async getDashboardData(): Promise<VpsDashboardData> {
-    return this.request<VpsDashboardData>("/dashboard/data");
+    // The VPS API returns { "server/login": { account_id, login, server, info, positions } }
+    // Transform into our normalized format
+    const raw = await this.request<
+      Record<
+        string,
+        {
+          account_id: string;
+          login: string;
+          server: string;
+          info: Record<string, string>;
+          positions: { status: string; positions?: unknown[] };
+        }
+      >
+    >("/dashboard/data", {}, 60_000);
+
+    const accounts: VpsDashboardAccount[] = Object.values(raw).map((acct) => ({
+      login: acct.login,
+      server: acct.server,
+      broker: "",
+      connected: acct.info?.status === "OK",
+      balance: parseFloat(acct.info?.balance || "0"),
+      equity: parseFloat(acct.info?.equity || "0"),
+      free_margin: parseFloat(acct.info?.free_margin || "0"),
+      profit:
+        parseFloat(acct.info?.equity || "0") -
+        parseFloat(acct.info?.balance || "0"),
+      positions: acct.positions?.positions?.length ?? 0,
+    }));
+
+    return { status: "ok", accounts };
   }
 
-  async getAccounts(): Promise<unknown> {
+  async getAccounts(): Promise<
+    Record<string, { account_id: string; login: string; server: string; install_dir: string; files_dir: string }>
+  > {
     return this.request("/accounts");
   }
 
@@ -65,7 +98,7 @@ export class VpsClient {
     return this.request("/accounts/add", {
       method: "POST",
       body: JSON.stringify(req),
-    });
+    }, 300_000); // 5 min — downloads + installs MT5
   }
 
   async removeAccount(login: string): Promise<unknown> {

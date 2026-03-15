@@ -30,7 +30,7 @@ async function pollAll() {
   try {
     vpsList = await prisma.vps.findMany({
       where: {
-        status: { in: ["ONLINE", "OFFLINE"] },
+        status: { in: ["ONLINE", "OFFLINE", "PENDING"] },
       },
       include: { accounts: true },
     });
@@ -68,74 +68,96 @@ async function pollSingleVps(
 ) {
   const client = new VpsClient({ ip: vps.ip, apiPort: vps.apiPort });
 
+  // Step 1: Ping via /accounts (fast, no EA calls)
+  let reachable = false;
   try {
-    const data = await client.getDashboardData();
+    const accounts = await client.getAccounts();
+    reachable = true;
 
-    // VPS is reachable — mark ONLINE
-    await prisma.vps.update({
-      where: { id: vps.id },
-      data: {
-        status: "ONLINE",
-        lastSeen: new Date(),
-        lastError: null,
-      },
-    });
-
-    // Upsert each account from dashboard data
-    for (const acct of data.accounts) {
-      const upserted = await prisma.account.upsert({
+    // Ensure all accounts from VPS registry exist in our DB
+    for (const acct of Object.values(accounts)) {
+      await prisma.account.upsert({
         where: {
           vpsId_server_login: {
             vpsId: vps.id,
             server: acct.server,
-            login: String(acct.login),
+            login: acct.login,
           },
-        },
-        update: {
-          broker: acct.broker || undefined,
-          balance: acct.balance,
-          equity: acct.equity,
-          freeMargin: acct.free_margin,
-          profit: acct.profit,
-          connected: acct.connected,
-          lastSynced: new Date(),
         },
         create: {
           vpsId: vps.id,
-          login: String(acct.login),
+          login: acct.login,
           server: acct.server,
-          broker: acct.broker || null,
-          balance: acct.balance,
-          equity: acct.equity,
-          freeMargin: acct.free_margin,
-          profit: acct.profit,
-          connected: acct.connected,
-          lastSynced: new Date(),
         },
+        update: {},
       });
-
-      // Insert snapshot every 5 minutes
-      if (shouldSnapshot) {
-        await prisma.accountSnapshot.create({
-          data: {
-            accountId: upserted.id,
-            balance: acct.balance,
-            equity: acct.equity,
-            profit: acct.profit,
-            positions: acct.positions,
-          },
-        });
-      }
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
 
     await prisma.vps.update({
       where: { id: vps.id },
-      data: {
-        status: "OFFLINE",
-        lastError: message,
-      },
+      data: { status: "ONLINE", lastSeen: new Date(), lastError: null },
     });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await prisma.vps.update({
+      where: { id: vps.id },
+      data: { status: "OFFLINE", lastError: message },
+    });
+    return;
+  }
+
+  // Step 2: Try to get detailed stats via /dashboard/data (slow, calls EA)
+  if (reachable) {
+    try {
+      const data = await client.getDashboardData();
+
+      for (const acct of data.accounts) {
+        const upserted = await prisma.account.upsert({
+          where: {
+            vpsId_server_login: {
+              vpsId: vps.id,
+              server: acct.server,
+              login: String(acct.login),
+            },
+          },
+          update: {
+            broker: acct.broker || undefined,
+            balance: acct.balance,
+            equity: acct.equity,
+            freeMargin: acct.free_margin,
+            profit: acct.profit,
+            connected: acct.connected,
+            lastSynced: new Date(),
+          },
+          create: {
+            vpsId: vps.id,
+            login: String(acct.login),
+            server: acct.server,
+            broker: acct.broker || null,
+            balance: acct.balance,
+            equity: acct.equity,
+            freeMargin: acct.free_margin,
+            profit: acct.profit,
+            connected: acct.connected,
+            lastSynced: new Date(),
+          },
+        });
+
+        if (shouldSnapshot) {
+          await prisma.accountSnapshot.create({
+            data: {
+              accountId: upserted.id,
+              balance: acct.balance,
+              equity: acct.equity,
+              profit: acct.profit,
+              positions: acct.positions,
+            },
+          });
+        }
+      }
+    } catch (err) {
+      // Dashboard data failed but VPS is still reachable — don't mark offline
+      console.error(`[polling] Dashboard data failed for ${vps.name}:`, err);
+    }
   }
 }

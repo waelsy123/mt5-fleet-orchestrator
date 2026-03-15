@@ -15,9 +15,19 @@ export async function GET(
 ) {
   try {
     const { vpsId, server, login } = await params;
-    const { client } = await getClient(vpsId);
+    const { client, vps } = await getClient(vpsId);
     const info = await client.getAccountInfo(server, login);
-    return NextResponse.json(info);
+    return NextResponse.json({
+      login: info.login,
+      server: info.server,
+      balance: info.balance,
+      equity: info.equity,
+      profit: info.equity - info.balance,
+      freeMargin: info.free_margin,
+      leverage: info.leverage,
+      connected: info.status === "OK",
+      vpsName: vps.name,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Plus, Trash2, Play } from "lucide-react";
+import { Plus, Trash2, Play, RefreshCw, Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { formatCurrency, formatProfit, profitColor } from "@/lib/format";
 
 interface Account {
@@ -40,7 +40,7 @@ interface VpsDetail {
   id: string;
   name: string;
   ip: string;
-  status: "ONLINE" | "OFFLINE" | "PENDING" | "ERROR";
+  status: "ONLINE" | "OFFLINE" | "PENDING" | "PROVISIONING" | "ERROR";
   vncIp: string;
   vncPort: number;
   accounts: Account[];
@@ -77,6 +77,13 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
     installerUrl: "",
   });
   const [submitting, setSubmitting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [serverResults, setServerResults] = useState<{ server: string; installer_url: string }[]>([]);
+  const [serverDropdownOpen, setServerDropdownOpen] = useState(false);
+  const [serverSearchTimeout, setServerSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const [setupJobId, setSetupJobId] = useState<string | null>(null);
+  const [setupSteps, setSetupSteps] = useState<string[]>([]);
+  const [setupStatus, setSetupStatus] = useState<"idle" | "running" | "success" | "failed">("idle");
 
   async function fetchVps() {
     try {
@@ -100,6 +107,9 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
   async function handleAddAccount(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
+    setSetupStatus("running");
+    setSetupSteps(["Submitting account setup request..."]);
+
     try {
       const res = await fetch(`/api/accounts/${id}`, {
         method: "POST",
@@ -109,22 +119,94 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
           password: accountForm.password,
           server: accountForm.server,
           broker: accountForm.broker || undefined,
-          installerUrl: accountForm.installerUrl || undefined,
+          installer_url: accountForm.installerUrl || undefined,
         }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to add account");
+        throw new Error(data.error || "Failed to start account setup");
       }
-      toast.success("Account added successfully");
-      setDialogOpen(false);
-      setAccountForm({ login: "", password: "", server: "", broker: "", installerUrl: "" });
-      fetchVps();
+      const { jobId } = await res.json();
+      setSetupJobId(jobId);
+
+      // Poll for status
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(
+            `/api/accounts/${id}/setup-status?jobId=${jobId}`
+          );
+          if (!statusRes.ok) return;
+          const statusData = await statusRes.json();
+          setSetupSteps(statusData.steps || []);
+
+          if (statusData.status === "success") {
+            clearInterval(pollInterval);
+            setSetupStatus("success");
+            setSubmitting(false);
+            toast.success(`Account ${accountForm.login} added!`);
+            fetchVps();
+          } else if (statusData.status === "failed") {
+            clearInterval(pollInterval);
+            setSetupStatus("failed");
+            setSubmitting(false);
+            toast.error(statusData.error || "Account setup failed");
+          }
+        } catch {
+          // polling error — keep trying
+        }
+      }, 2000);
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to add account");
-    } finally {
+      setSetupStatus("failed");
+      setSetupSteps((prev) => [
+        ...prev,
+        `ERROR: ${err instanceof Error ? err.message : "Unknown error"}`,
+      ]);
       setSubmitting(false);
     }
+  }
+
+  function handleServerSearch(value: string) {
+    setAccountForm((p) => ({ ...p, server: value }));
+    if (serverSearchTimeout) clearTimeout(serverSearchTimeout);
+    if (value.length < 2) {
+      setServerResults([]);
+      setServerDropdownOpen(false);
+      return;
+    }
+    const timeout = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/servers/search?q=${encodeURIComponent(value)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setServerResults(data.results || []);
+        setServerDropdownOpen((data.results || []).length > 0);
+      } catch {
+        setServerDropdownOpen(false);
+      }
+    }, 300);
+    setServerSearchTimeout(timeout);
+  }
+
+  function selectServer(server: string, installerUrl: string) {
+    setAccountForm((p) => ({
+      ...p,
+      server,
+      installerUrl: installerUrl || p.installerUrl,
+    }));
+    setServerDropdownOpen(false);
+    if (installerUrl) {
+      toast.success(`Installer auto-detected for ${server}`);
+    }
+  }
+
+  function resetSetupDialog() {
+    setDialogOpen(false);
+    setSetupJobId(null);
+    setSetupSteps([]);
+    setSetupStatus("idle");
+    setAccountForm({ login: "", password: "", server: "", broker: "", installerUrl: "" });
+    setServerResults([]);
+    setServerDropdownOpen(false);
   }
 
   async function handleDelete() {
@@ -135,6 +217,21 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
       router.push("/vps");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to delete VPS");
+    }
+  }
+
+  async function handleSync() {
+    setSyncing(true);
+    try {
+      const res = await fetch(`/api/vps/${id}/sync`, { method: "POST" });
+      if (!res.ok) throw new Error("Failed to sync accounts");
+      const data = await res.json();
+      toast.success(`Synced ${data.synced} account(s) from VPS`);
+      fetchVps();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Sync failed");
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -165,14 +262,30 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
           <p className="text-sm text-zinc-400 font-mono">{vps.ip}</p>
         </div>
         <div className="flex gap-2">
-          {(vps.status === "PENDING" || vps.status === "ERROR") && (
-            <Link href={`/vps/${id}/provision`}>
-              <Button className="bg-blue-600 hover:bg-blue-700 text-white">
-                <Play className="mr-2 h-4 w-4" />
-                Provision
-              </Button>
-            </Link>
-          )}
+          <Button
+            onClick={handleSync}
+            disabled={syncing}
+            variant="ghost"
+            className="text-blue-500 hover:text-blue-400 hover:bg-blue-500/10"
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? "Syncing..." : "Sync Accounts"}
+          </Button>
+          <Link href={`/vps/${id}/provision`}>
+            <Button
+              className={
+                vps.status === "PROVISIONING"
+                  ? "bg-yellow-600 hover:bg-yellow-700 text-white animate-pulse"
+                  : vps.status === "PENDING" || vps.status === "ERROR"
+                    ? "bg-blue-600 hover:bg-blue-700 text-white"
+                    : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+              }
+              variant={vps.status === "ONLINE" || vps.status === "OFFLINE" ? "ghost" : "default"}
+            >
+              <Play className="mr-2 h-4 w-4" />
+              {vps.status === "PROVISIONING" ? "View Progress..." : "Provision"}
+            </Button>
+          </Link>
           {!deleteConfirm ? (
             <Button
               variant="ghost"
@@ -205,86 +318,168 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
       <Card className="border-zinc-700 bg-zinc-900">
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-zinc-100">Accounts</CardTitle>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger
-              render={
-                <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white" />
-              }
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              Add Account
+          <Dialog open={dialogOpen} onOpenChange={(open) => {
+            if (!open && setupStatus !== "running") resetSetupDialog();
+            else setDialogOpen(open);
+          }}>
+            <DialogTrigger>
+              <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white">
+                <Plus className="mr-2 h-4 w-4" />
+                Add Account
+              </Button>
             </DialogTrigger>
-            <DialogContent className="border-zinc-700 bg-zinc-900">
+            <DialogContent className="border-zinc-700 bg-zinc-900 sm:max-w-lg">
               <DialogHeader>
-                <DialogTitle className="text-zinc-100">Add Account</DialogTitle>
+                <DialogTitle className="text-zinc-100">
+                  {setupStatus === "idle" ? "Add Account" : `Setting up account ${accountForm.login}`}
+                </DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleAddAccount} className="space-y-4">
-                <div className="space-y-2">
-                  <Label className="text-zinc-300">Login</Label>
-                  <Input
-                    value={accountForm.login}
-                    onChange={(e) => setAccountForm((p) => ({ ...p, login: e.target.value }))}
-                    required
-                    className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
-                    placeholder="e.g. 26107909"
-                  />
+
+              {setupStatus === "idle" ? (
+                <form onSubmit={handleAddAccount} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label className="text-zinc-300">Login</Label>
+                    <Input
+                      value={accountForm.login}
+                      onChange={(e) => setAccountForm((p) => ({ ...p, login: e.target.value }))}
+                      required
+                      className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
+                      placeholder="e.g. 26107909"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-zinc-300">Password</Label>
+                    <Input
+                      type="password"
+                      value={accountForm.password}
+                      onChange={(e) => setAccountForm((p) => ({ ...p, password: e.target.value }))}
+                      required
+                      className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
+                    />
+                  </div>
+                  <div className="space-y-2 relative">
+                    <Label className="text-zinc-300">Server (type to search)</Label>
+                    <Input
+                      value={accountForm.server}
+                      onChange={(e) => handleServerSearch(e.target.value)}
+                      onFocus={() => { if (serverResults.length > 0) setServerDropdownOpen(true); }}
+                      onBlur={() => setTimeout(() => setServerDropdownOpen(false), 200)}
+                      required
+                      autoComplete="off"
+                      className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
+                      placeholder="Type broker name, e.g. aqua, ftmo..."
+                    />
+                    {serverDropdownOpen && serverResults.length > 0 && (
+                      <div className="absolute z-50 top-full left-0 right-0 mt-1 max-h-[200px] overflow-y-auto rounded-md border border-zinc-600 bg-zinc-800 shadow-lg">
+                        {serverResults.map((r) => (
+                          <button
+                            key={r.server}
+                            type="button"
+                            className="w-full text-left px-3 py-2 text-sm text-zinc-200 hover:bg-blue-600 hover:text-white border-b border-zinc-700 last:border-b-0 flex items-center justify-between"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => selectServer(r.server, r.installer_url)}
+                          >
+                            <span>{r.server}</span>
+                            {r.installer_url && (
+                              <span className="text-xs text-emerald-400 ml-2">&#10003; installer</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-zinc-300">Installer URL {accountForm.installerUrl ? "" : "(optional)"}</Label>
+                    <Input
+                      value={accountForm.installerUrl}
+                      onChange={(e) => setAccountForm((p) => ({ ...p, installerUrl: e.target.value }))}
+                      className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
+                      placeholder={accountForm.installerUrl ? "" : "Auto-detected when you select a server"}
+                    />
+                  </div>
+                  <div className="flex gap-3 pt-2">
+                    <Button
+                      type="submit"
+                      disabled={submitting}
+                      className="bg-blue-600 hover:bg-blue-700 text-white"
+                    >
+                      Add Account
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => setDialogOpen(false)}
+                      className="text-zinc-400"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </form>
+              ) : (
+                <div className="space-y-4">
+                  {/* Status indicator */}
+                  <div className="flex items-center gap-3">
+                    {setupStatus === "running" && (
+                      <div className="flex items-center gap-2 text-blue-400">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                        <span className="text-sm font-medium">Setting up account... (2-4 minutes)</span>
+                      </div>
+                    )}
+                    {setupStatus === "success" && (
+                      <div className="flex items-center gap-2 text-emerald-400">
+                        <CheckCircle2 className="h-5 w-5" />
+                        <span className="text-sm font-medium">Account setup complete!</span>
+                      </div>
+                    )}
+                    {setupStatus === "failed" && (
+                      <div className="flex items-center gap-2 text-red-400">
+                        <XCircle className="h-5 w-5" />
+                        <span className="text-sm font-medium">Account setup failed</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Progress bar */}
+                  {setupStatus === "running" && (
+                    <div className="h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
+                      <div className="h-full w-full rounded-full bg-blue-500 animate-pulse" />
+                    </div>
+                  )}
+
+                  {/* Steps log */}
+                  <div className="max-h-[250px] overflow-auto rounded bg-black p-3 font-mono text-xs leading-5 text-green-400">
+                    {setupSteps.map((step, i) => (
+                      <div key={i} className={`whitespace-pre-wrap ${
+                        step.startsWith("ERROR") || step.startsWith("Failed")
+                          ? "text-red-400"
+                          : step.startsWith("WARNING")
+                            ? "text-yellow-400"
+                            : ""
+                      }`}>
+                        {step}
+                      </div>
+                    ))}
+                    {setupStatus === "running" && (
+                      <div className="text-zinc-500 animate-pulse mt-1">Waiting for VPS response...</div>
+                    )}
+                  </div>
+
+                  {/* Close button when done */}
+                  {setupStatus !== "running" && (
+                    <div className="flex gap-3 pt-2">
+                      <Button
+                        onClick={resetSetupDialog}
+                        className={setupStatus === "success"
+                          ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                          : "bg-zinc-700 hover:bg-zinc-600 text-white"
+                        }
+                      >
+                        {setupStatus === "success" ? "Done" : "Close"}
+                      </Button>
+                    </div>
+                  )}
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-zinc-300">Password</Label>
-                  <Input
-                    type="password"
-                    value={accountForm.password}
-                    onChange={(e) => setAccountForm((p) => ({ ...p, password: e.target.value }))}
-                    required
-                    className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-zinc-300">Server</Label>
-                  <Input
-                    value={accountForm.server}
-                    onChange={(e) => setAccountForm((p) => ({ ...p, server: e.target.value }))}
-                    required
-                    className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
-                    placeholder="e.g. FivePercentOnline-Real"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-zinc-300">Broker (optional)</Label>
-                  <Input
-                    value={accountForm.broker}
-                    onChange={(e) => setAccountForm((p) => ({ ...p, broker: e.target.value }))}
-                    className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
-                    placeholder="e.g. FivePercentOnline"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-zinc-300">Installer URL (optional)</Label>
-                  <Input
-                    value={accountForm.installerUrl}
-                    onChange={(e) => setAccountForm((p) => ({ ...p, installerUrl: e.target.value }))}
-                    className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
-                    placeholder="https://download.mql5.com/cdn/web/..."
-                  />
-                </div>
-                <div className="flex gap-3 pt-2">
-                  <Button
-                    type="submit"
-                    disabled={submitting}
-                    className="bg-blue-600 hover:bg-blue-700 text-white"
-                  >
-                    {submitting ? "Adding..." : "Add Account"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => setDialogOpen(false)}
-                    className="text-zinc-400"
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </form>
+              )}
             </DialogContent>
           </Dialog>
         </CardHeader>

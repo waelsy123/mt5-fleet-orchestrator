@@ -23,6 +23,7 @@ export async function startProvisioning(
   });
 
   const child = spawn("python3", [
+    "-u", // unbuffered output so logs stream in real-time
     scriptPath,
     ip,
     vncIp,
