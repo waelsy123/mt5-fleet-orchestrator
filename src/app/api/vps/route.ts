@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { VpsClient } from "@/lib/vps-client";
 
 export async function GET() {
   try {
@@ -24,6 +25,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { name, ip, vncIp, vncPort, password, apiPort } = body;
 
+    const port = apiPort ?? 8000;
     const vps = await prisma.vps.create({
       data: {
         name,
@@ -31,9 +33,49 @@ export async function POST(request: NextRequest) {
         vncIp: vncIp ?? null,
         vncPort: vncPort ?? null,
         password,
-        apiPort: apiPort ?? 8000,
+        apiPort: port,
       },
     });
+
+    // Try to sync accounts if VPS API is already running
+    try {
+      const client = new VpsClient({ ip, apiPort: port });
+      const accounts = await client.getAccounts();
+      const entries = Object.values(accounts);
+
+      if (entries.length > 0) {
+        for (const acct of entries) {
+          await prisma.account.upsert({
+            where: {
+              vpsId_server_login: {
+                vpsId: vps.id,
+                server: acct.server,
+                login: acct.login,
+              },
+            },
+            create: {
+              vpsId: vps.id,
+              login: acct.login,
+              server: acct.server,
+            },
+            update: {},
+          });
+        }
+
+        await prisma.vps.update({
+          where: { id: vps.id },
+          data: { status: "ONLINE", lastSeen: new Date(), lastError: null },
+        });
+
+        const updated = await prisma.vps.findUniqueOrThrow({
+          where: { id: vps.id },
+          include: { accounts: true },
+        });
+        return NextResponse.json(updated, { status: 201 });
+      }
+    } catch {
+      // VPS API not reachable yet — that's fine, stays PENDING
+    }
 
     return NextResponse.json(vps, { status: 201 });
   } catch (err) {
