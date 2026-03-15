@@ -240,7 +240,7 @@ def _download_file(url: str, dest: str):
 
 
 def _find_installed_terminal() -> str | None:
-    """Find terminal64.exe in common install locations."""
+    """Find terminal64.exe in common install locations (Program Files)."""
     search_dirs = [
         r"C:\Program Files",
         r"C:\Program Files (x86)",
@@ -266,13 +266,55 @@ def _install_terminal(installer_path: str) -> str | None:
     return _find_installed_terminal()
 
 
-def _get_data_dir() -> str | None:
-    """Find the non-portable terminal data directory under AppData.
+def _copy_terminal_for_account(source_terminal: str, login: str) -> str:
+    """Copy terminal installation to per-account directory C:\\MT5\\{login}\\.
 
-    After a terminal runs, it creates a hash-named folder under
-    AppData/Roaming/MetaQuotes/Terminal/. We find the most recently
-    modified one (excluding Common/Community).
+    Each account gets its own terminal64.exe copy. Running from a unique path
+    makes MT5 create a unique AppData hash dir, isolating accounts.
+    Does NOT use /portable — portable mode is broken on build 5687+.
     """
+    account_dir = os.path.join(BASE_DIR, login)
+    account_terminal = os.path.join(account_dir, "terminal64.exe")
+    if os.path.exists(account_terminal):
+        return account_terminal
+    source_dir = os.path.dirname(source_terminal)
+    shutil.copytree(source_dir, account_dir, dirs_exist_ok=True)
+    return account_terminal
+
+
+def _get_data_dir_for_account(login: str) -> str | None:
+    """Find the AppData data dir created by this account's terminal.
+
+    Each terminal exe path generates a unique hash dir under AppData.
+    We find it by looking for the most recently modified dir that was
+    created AFTER we started this account's terminal (newest dir).
+    """
+    base = os.path.join(os.environ.get("APPDATA", ""), "MetaQuotes", "Terminal")
+    if not os.path.isdir(base):
+        return None
+    # Collect all candidate dirs with their modification times
+    candidates = []
+    for entry in os.listdir(base):
+        if entry in ("Common", "Community"):
+            continue
+        full = os.path.join(base, entry)
+        if os.path.isdir(full):
+            candidates.append((full, os.path.getmtime(full)))
+    if not candidates:
+        return None
+    # Return the most recently modified
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return candidates[0][0]
+
+
+def _get_known_data_dirs() -> set:
+    """Get set of data dirs already registered to other accounts."""
+    accounts = load_accounts()
+    return {acc["install_dir"] for acc in accounts.values()}
+
+
+def _get_new_data_dir(known_dirs: set) -> str | None:
+    """Find a data dir that isn't already registered to another account."""
     base = os.path.join(os.environ.get("APPDATA", ""), "MetaQuotes", "Terminal")
     if not os.path.isdir(base):
         return None
@@ -282,12 +324,26 @@ def _get_data_dir() -> str | None:
         if entry in ("Common", "Community"):
             continue
         full = os.path.join(base, entry)
-        if os.path.isdir(full):
+        if os.path.isdir(full) and full not in known_dirs:
             mtime = os.path.getmtime(full)
             if mtime > best_time:
                 best_time = mtime
                 best = full
     return best
+
+
+def _stop_terminal_for_account(login: str):
+    """Stop only the terminal for this account (by matching command line)."""
+    try:
+        result = subprocess.run(
+            ["powershell", "-Command",
+             f'Get-WmiObject Win32_Process -Filter "name=\'terminal64.exe\'" | '
+             f'Where-Object {{ $_.CommandLine -match "{login}" }} | '
+             f'ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}'],
+            capture_output=True, timeout=15,
+        )
+    except Exception:
+        pass
 
 
 def _start_terminal(terminal_path: str, ini_path: str, login: str):
@@ -327,13 +383,17 @@ def _wait_for_ea(files_dir: str, timeout: int = 60) -> bool:
 
 @app.post("/accounts/add", summary="Add a new trading account (fully automated setup)")
 def add_account(req: AddAccountRequest):
-    """Fully automated account setup (non-portable mode):
+    """Fully automated account setup — one terminal per account:
 
-    1. Finds or installs terminal in Program Files
-    2. Writes startup.ini and common.ini to C:\\MT5\\{login}\\
-    3. Starts terminal, waits for AppData data dir to appear
-    4. Copies PythonBridge EA to AppData MQL5\\Experts
-    5. Restarts terminal, waits for EA, verifies broker connection
+    1. Finds or installs MT5 terminal in Program Files
+    2. Copies terminal to C:\\MT5\\{login}\\ (unique exe path → unique AppData hash)
+    3. Writes startup.ini and common.ini
+    4. Starts terminal, waits for AppData data dir, copies EA
+    5. Waits for EA compilation, restarts, verifies broker connection
+
+    Does NOT use /portable — portable mode is broken on MT5 build 5687+.
+    Instead, each account runs from its own terminal copy in C:\\MT5\\{login}\\,
+    which creates a unique AppData data dir per account.
     """
     # ── Resolve broker config ────────────────────────────────────────────
     if req.broker:
@@ -355,18 +415,14 @@ def add_account(req: AddAccountRequest):
     if not req.server:
         raise HTTPException(status_code=400, detail="server is required (or provide broker name)")
 
-    # Config dir: C:\MT5\{login}\ (just configs, NOT a portable install)
-    config_base = os.path.join(BASE_DIR, req.login)
-    config_dir = os.path.join(config_base, "config")
-    ini_path = os.path.join(config_base, "startup.ini")
+    account_dir = os.path.join(BASE_DIR, req.login)
+    config_dir = os.path.join(account_dir, "config")
+    ini_path = os.path.join(account_dir, "startup.ini")
     steps = []
 
-    # ── Step 1: Get terminal binary (in Program Files) ───────────────────
-    terminal_path = _find_installed_terminal()
-    if terminal_path:
-        steps.append(f"Using existing terminal: {terminal_path}")
-    else:
-        # Download installer if URL provided
+    # ── Step 1: Get or install base terminal in Program Files ────────────
+    source_terminal = _find_installed_terminal()
+    if not source_terminal:
         installer_path = req.installer_path
         if req.installer_url and not installer_path:
             filename = req.installer_url.split("/")[-1]
@@ -383,9 +439,9 @@ def add_account(req: AddAccountRequest):
         if installer_path:
             if not os.path.exists(installer_path):
                 raise HTTPException(status_code=400, detail=f"Installer not found: {installer_path}")
-            terminal_path = _install_terminal(installer_path)
-            if terminal_path:
-                steps.append(f"Installed terminal: {terminal_path}")
+            source_terminal = _install_terminal(installer_path)
+            if source_terminal:
+                steps.append(f"Installed terminal: {source_terminal}")
             else:
                 raise HTTPException(status_code=500, detail="Installer ran but terminal64.exe not found")
         else:
@@ -393,8 +449,14 @@ def add_account(req: AddAccountRequest):
                 status_code=400,
                 detail="No terminal available. Provide installer_url or installer_path.",
             )
+    else:
+        steps.append(f"Base terminal: {source_terminal}")
 
-    # ── Step 2: Write configs to C:\MT5\{login}\ ────────────────────────
+    # ── Step 2: Copy terminal to per-account dir ─────────────────────────
+    terminal_path = _copy_terminal_for_account(source_terminal, req.login)
+    steps.append(f"Account terminal: {terminal_path}")
+
+    # ── Step 3: Write configs ────────────────────────────────────────────
     os.makedirs(config_dir, exist_ok=True)
 
     with open(ini_path, "w", newline="") as f:
@@ -433,26 +495,27 @@ def add_account(req: AddAccountRequest):
         )
     steps.append("Configs created")
 
-    # ── Step 3: First launch — creates AppData data dir ──────────────────
-    subprocess.run(["taskkill", "/f", "/im", "terminal64.exe"],
-                   capture_output=True, timeout=10)
+    # ── Step 4: First launch — creates unique AppData data dir ───────────
+    known_dirs = _get_known_data_dirs()
+    _stop_terminal_for_account(req.login)
     time.sleep(2)
 
     _start_terminal(terminal_path, ini_path, req.login)
     steps.append("Terminal started (first run — creating data dir, compiling EA)")
 
-    # Wait for AppData data dir to appear
-    time.sleep(20)
-    data_dir = _get_data_dir()
+    # Wait for a NEW AppData data dir to appear (not one already registered)
+    data_dir = None
+    for _ in range(8):  # up to 40s
+        time.sleep(5)
+        data_dir = _get_new_data_dir(known_dirs)
+        if data_dir:
+            break
+
     if not data_dir:
-        # Give it more time
-        time.sleep(20)
-        data_dir = _get_data_dir()
-    if not data_dir:
-        steps.append("WARNING: AppData data dir not found — terminal may not have started")
+        steps.append("WARNING: New data dir not found — terminal may not have started")
         return {
             "status": "ERROR",
-            "message": f"Terminal data directory not created",
+            "message": "Terminal data directory not created",
             "connected": False,
             "steps": steps,
         }
@@ -463,18 +526,18 @@ def add_account(req: AddAccountRequest):
     os.makedirs(experts_dir, exist_ok=True)
     steps.append(f"Data dir: {data_dir}")
 
-    # ── Step 4: Copy PythonBridge EA and wait for compilation ────────────
+    # ── Step 5: Copy EA, wait for compilation, restart ───────────────────
     ea_source = Path(__file__).parent / "PythonBridge.mq5"
     if ea_source.exists():
         shutil.copy2(str(ea_source), os.path.join(experts_dir, "PythonBridge.mq5"))
         steps.append("Copied PythonBridge EA to data dir")
 
-    # Also copy common.ini to data dir config
+    # Copy common.ini to data dir config
     data_config = os.path.join(data_dir, "config")
     os.makedirs(data_config, exist_ok=True)
     shutil.copy2(os.path.join(config_dir, "common.ini"), os.path.join(data_config, "common.ini"))
 
-    # Wait for MQL5 compilation to finish (first install compiles ~123 files, takes ~90s)
+    # Wait for EA compilation (first install compiles ~123 files, takes ~90s)
     ex5_path = os.path.join(experts_dir, "PythonBridge.ex5")
     steps.append("Waiting for EA compilation...")
     for _ in range(24):  # up to 120s
@@ -485,22 +548,20 @@ def add_account(req: AddAccountRequest):
     else:
         steps.append("WARNING: EA compilation timed out (120s)")
 
-    # Restart terminal so it picks up the compiled EA
-    subprocess.run(["taskkill", "/f", "/im", "terminal64.exe"],
-                   capture_output=True, timeout=10)
+    # Restart this account's terminal so it picks up the compiled EA
+    _stop_terminal_for_account(req.login)
     time.sleep(3)
     _start_terminal(terminal_path, ini_path, req.login)
     steps.append("Terminal restarted with compiled EA")
 
-    # ── Step 5: Wait for EA to respond ───────────────────────────────────
+    # ── Step 6: Wait for EA to respond ───────────────────────────────────
     time.sleep(15)
     if _wait_for_ea(files_dir, timeout=30):
         steps.append("EA connected")
     else:
-        # One more restart — EA may not have attached to chart
+        # Final restart attempt
         steps.append("EA not ready — trying final restart")
-        subprocess.run(["taskkill", "/f", "/im", "terminal64.exe"],
-                       capture_output=True, timeout=10)
+        _stop_terminal_for_account(req.login)
         time.sleep(3)
         _start_terminal(terminal_path, ini_path, req.login)
         time.sleep(15)
@@ -509,7 +570,7 @@ def add_account(req: AddAccountRequest):
         else:
             steps.append("WARNING: EA not responding — check terminal logs")
 
-    # ── Step 6: Register account with data dir path ──────────────────────
+    # ── Step 7: Register account with data dir path ──────────────────────
     path = registry_path()
     lines = []
     if os.path.exists(path):
@@ -520,13 +581,12 @@ def add_account(req: AddAccountRequest):
     save_accounts_raw(lines)
     steps.append("Account registered")
 
-    # ── Step 7: Verify broker connection ─────────────────────────────────
+    # ── Step 8: Verify broker connection ─────────────────────────────────
     result = send_command(files_dir, "POSITIONS|EURUSD", timeout=10)
     connected = result.get("status") == "OK"
     if connected:
         steps.append(f"Connected to {req.server}")
     else:
-        # Try QUOTE as fallback verification
         result2 = send_command(files_dir, "QUOTE|EURUSD", timeout=10)
         connected = result2.get("status") == "OK"
         if connected:
@@ -537,7 +597,7 @@ def add_account(req: AddAccountRequest):
 
     return {
         "status": "OK" if connected else "PARTIAL",
-        "message": f"Account {req.login} set up (non-portable mode)",
+        "message": f"Account {req.login} set up at {account_dir}",
         "data_dir": data_dir,
         "terminal_path": terminal_path,
         "connected": connected,
