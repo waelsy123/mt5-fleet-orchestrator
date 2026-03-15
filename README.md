@@ -1,36 +1,119 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# MT5 Fleet Orchestrator
 
-## Getting Started
+Next.js web app to manage a fleet of Windows VPS instances running MetaTrader 5 trading accounts. Provisions VPS servers from scratch (VNC + SSH automation), deploys trading APIs, and provides a unified dashboard to monitor and trade across all accounts.
 
-First, run the development server:
+**Deployed on Railway**: https://just-stillness-production.up.railway.app
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────┐
+│  Railway (Next.js + PostgreSQL)                        │
+│                                                        │
+│  Fleet Orchestrator                                    │
+│    ├── Dashboard UI        ← manage all VPS & accounts │
+│    ├── VPS provisioning    ← automated setup via VNC   │
+│    ├── Account management  ← add/remove MT5 accounts   │
+│    ├── Server search       ← MetaQuotes directory API  │
+│    └── PostgreSQL DB       ← VPS, accounts, snapshots  │
+└────────────────────────────────────────────────────────┘
+        │                           │
+        ▼                           ▼
+┌──────────────┐         ┌──────────────┐
+│  Windows VPS 1│         │  Windows VPS 2│  ...
+│  FastAPI :8000│         │  FastAPI :8000│
+│  MT5 terminals│         │  MT5 terminals│
+└──────────────┘         └──────────────┘
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Each Windows VPS runs the [MT5 Instance Account API](https://github.com/waelsy123/mt5-instance-account-api) — a FastAPI server with file-based EA bridge for trading.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Features
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **VPS Management** — Add, provision, and monitor Windows VPS instances
+- **Auto-Provisioning** — One-click VPS setup: VNC login → SSH install → API deploy (via `setup_vps.py`)
+- **Account Management** — Add MT5 trading accounts with searchable server dropdown (3000+ MetaQuotes servers)
+- **Server Search** — Search MetaQuotes directory with auto-detected installer URLs from `brokers.json`
+- **Live Dashboard** — Overview of all accounts across all VPS instances
+- **Trading** — Execute trades (buy/sell/close) from the web UI
+- **Copy Trading** — Opposite copier between accounts (source BUY → target SELL)
 
-## Learn More
+## Tech Stack
 
-To learn more about Next.js, take a look at the following resources:
+- **Frontend**: Next.js 15, React, Tailwind CSS, shadcn/ui
+- **Backend**: Next.js API routes, Prisma ORM
+- **Database**: PostgreSQL (Railway)
+- **VPS Agent**: Python FastAPI (`python/mt5_multi_api.py`)
+- **Provisioning**: Python VNC/SSH automation (`python/setup_vps.py`)
+- **Deployment**: Railway (Docker)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Pages
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Route | Description |
+|-------|-------------|
+| `/` | Dashboard — overview of all VPS and accounts |
+| `/vps` | VPS list — status, account counts, actions |
+| `/vps/new` | Add new VPS (IP, VNC, password) |
+| `/vps/[id]` | VPS detail — accounts, add account with server search dropdown |
+| `/accounts` | All accounts across all VPS instances |
+| `/trade` | Trading interface — buy/sell/close on any account |
+| `/copier` | Opposite copy trading setup and monitoring |
 
-## Deploy on Vercel
+## API Routes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/api/vps` | List all VPS instances |
+| POST | `/api/vps` | Add and provision a new VPS |
+| GET | `/api/vps/[id]` | Get VPS details with accounts |
+| DELETE | `/api/vps/[id]` | Remove VPS and its accounts |
+| GET | `/api/accounts` | List all accounts |
+| GET | `/api/accounts/[vpsId]` | Accounts for a specific VPS |
+| GET | `/api/servers/search?q=` | Search MetaQuotes server directory |
+| GET | `/api/dashboard` | Aggregated dashboard data |
+| GET | `/api/health` | Health check |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Database Schema
+
+- **Vps** — id, name, ip, vncIp, vncPort, password, apiPort, status (PENDING/PROVISIONING/ONLINE/OFFLINE/ERROR)
+- **Account** — id, vpsId, login, server, broker, balance, equity, freeMargin, profit, connected
+- **AccountSnapshot** — periodic balance/equity/profit snapshots for history
+- **ProvisionLog** — VPS provisioning step logs with timestamps
+
+## Local Development
+
+```bash
+npm install
+cp .env.example .env  # Set DATABASE_URL
+npx prisma migrate dev
+npm run dev
+```
+
+## Deployment
+
+Deployed via Railway CLI:
+
+```bash
+railway up
+```
+
+Or push to GitHub — Railway auto-deploys from the connected repo.
+
+## Python Scripts (VPS Agent)
+
+The `python/` directory contains scripts deployed to each Windows VPS:
+
+| File | Purpose |
+|------|---------|
+| `mt5_multi_api.py` | FastAPI trading API with file-based EA bridge |
+| `setup_vps.py` | Automated VPS provisioning (VNC + SSH) |
+| `PythonBridge.mq5` | MQL5 Expert Advisor for MT5 terminals |
+| `brokers.json` | Pre-configured broker installer URLs |
+| `discover_servers.py` | VNC-based MT5 server discovery automation |
+
+## Key Design Decisions
+
+- **Non-portable MT5 mode**: Portable mode (`/portable`) is broken on MT5 build 5687+. Terminals install to Program Files, data goes to AppData.
+- **File-based EA bridge**: The official MT5 Python package has a fatal IPC bug (-10005). PythonBridge EA polls `command.txt` every 200ms instead.
+- **schtasks for processes**: SSH child processes die when the session closes. Scheduled tasks run in the interactive desktop session and survive.
+- **SFTP for file generation**: Writing scripts via SSH PowerShell corrupts `\"` escaping. SFTP bypasses this.
