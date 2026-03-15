@@ -13,10 +13,10 @@ export default function NewVpsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [autoProvision, setAutoProvision] = useState(true);
   const [form, setForm] = useState({
-    name: "",
-    ip: "",
-    vncIp: "",
-    vncPort: "5900",
+    name: "VPS1",
+    ip: "167.86.102.187",
+    vncIp: "5.189.128.199",
+    vncPort: "63238",
     password: "",
   });
 
