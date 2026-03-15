@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MT5 Admin Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a; --text: #e1e4ed;
+    --muted: #8b8fa3; --accent: #4f8ff7; --green: #34d399; --red: #f87171;
+    --yellow: #fbbf24;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* Layout */
+  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .header .status { font-size: 13px; color: var(--muted); }
+  .header .status.online { color: var(--green); }
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 24px; background: var(--surface); border-radius: 8px; padding: 4px; }
+  .tab { padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; color: var(--muted); border: none; background: none; transition: all 0.2s; }
+  .tab:hover { color: var(--text); }
+  .tab.active { background: var(--accent); color: #fff; }
+
+  /* Cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .card-title { font-size: 15px; font-weight: 600; }
+  .card-badge { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: var(--border); color: var(--muted); }
+  .card-badge.connected { background: rgba(52,211,153,0.15); color: var(--green); }
+  .card-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .stat-label { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  .stat-value { font-size: 18px; font-weight: 600; }
+  .stat-value.profit { color: var(--green); }
+  .stat-value.loss { color: var(--red); }
+
+  /* Table */
+  .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 24px; }
+  .table-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .table-header h3 { font-size: 15px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; padding: 10px 20px; font-size: 12px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+  td { padding: 12px 20px; font-size: 14px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  .type-buy { color: var(--green); font-weight: 600; }
+  .type-sell { color: var(--red); font-weight: 600; }
+
+  /* Forms */
+  .form-section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 24px; }
+  .form-section h3 { font-size: 15px; margin-bottom: 16px; }
+  .form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .form-group { display: flex; flex-direction: column; gap: 4px; }
+  .form-group label { font-size: 12px; color: var(--muted); }
+  .form-group input, .form-group select { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; color: var(--text); font-size: 14px; min-width: 120px; }
+  .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--accent); }
+
+  /* Buttons */
+  .btn { padding: 8px 18px; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; transition: all 0.15s; }
+  .btn-buy { background: var(--green); color: #000; }
+  .btn-buy:hover { background: #2cc48a; }
+  .btn-sell { background: var(--red); color: #fff; }
+  .btn-sell:hover { background: #e55b5b; }
+  .btn-close { background: var(--yellow); color: #000; }
+  .btn-close:hover { background: #e5ab1f; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #3d7de0; }
+  .btn-sm { padding: 5px 12px; font-size: 12px; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Toast */
+  .toast-container { position: fixed; top: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+  .toast { padding: 12px 20px; border-radius: 8px; font-size: 14px; animation: slideIn 0.3s ease; max-width: 400px; word-break: break-word; }
+  .toast.success { background: rgba(52,211,153,0.15); border: 1px solid var(--green); color: var(--green); }
+  .toast.error { background: rgba(248,113,113,0.15); border: 1px solid var(--red); color: var(--red); }
+  @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+  /* Sections */
+  .section { display: none; }
+  .section.active { display: block; }
+
+  /* Refresh */
+  .auto-refresh { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .auto-refresh input { accent-color: var(--accent); }
+
+  /* Loading */
+  .loading { text-align: center; padding: 40px; color: var(--muted); }
+  .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 8px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Empty state */
+  .empty { text-align: center; padding: 40px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>MT5 Admin Dashboard</h1>
+  <div class="auto-refresh">
+    <input type="checkbox" id="autoRefresh" checked>
+    <label for="autoRefresh">Auto-refresh (5s)</label>
+    <span id="connectionStatus" class="status">Connecting...</span>
+  </div>
+</div>
+
+<div class="container">
+  <div class="tabs">
+    <button class="tab active" data-tab="overview">Overview</button>
+    <button class="tab" data-tab="trade">Trade</button>
+    <button class="tab" data-tab="copier">Copy Trading</button>
+    <button class="tab" data-tab="accounts">Manage Accounts</button>
+  </div>
+
+  <!-- Overview -->
+  <div id="overview" class="section active">
+    <div id="accountCards" class="cards"></div>
+    <div class="table-wrap">
+      <div class="table-header">
+        <h3>All Open Positions</h3>
+        <button class="btn btn-primary btn-sm" onclick="refreshAll()">Refresh</button>
+      </div>
+      <table>
+        <thead><tr><th>Account</th><th>Ticket</th><th>Symbol</th><th>Type</th><th>Volume</th><th>Open Price</th><th>Profit</th><th>SL</th><th>TP</th><th></th></tr></thead>
+        <tbody id="positionsTable"><tr><td colspan="10" class="loading"><span class="spinner"></span>Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Trade -->
+  <div id="trade" class="section">
+    <div class="form-section">
+      <h3>Open Trade</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Account</label>
+          <select id="tradeAccount"></select>
+        </div>
+        <div class="form-group">
+          <label>Symbol</label>
+          <input type="text" id="tradeSymbol" value="EURUSD" placeholder="EURUSD">
+        </div>
+        <div class="form-group">
+          <label>Volume</label>
+          <input type="number" id="tradeVolume" value="0.01" step="0.01" min="0.01">
+        </div>
+        <div class="form-group">
+          <label>Stop Loss</label>
+          <input type="number" id="tradeSL" value="0" step="0.00001" min="0">
+        </div>
+        <div class="form-group">
+          <label>Take Profit</label>
+          <input type="number" id="tradeTP" value="0" step="0.00001" min="0">
+        </div>
+        <button class="btn btn-buy" id="btnBuy" onclick="executeTrade('buy')">BUY</button>
+        <button class="btn btn-sell" id="btnSell" onclick="executeTrade('sell')">SELL</button>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <h3>Close Positions</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Account</label>
+          <select id="closeAccount"></select>
+        </div>
+        <div class="form-group">
+          <label>Symbol (empty = close all)</label>
+          <input type="text" id="closeSymbol" placeholder="EURUSD or leave empty">
+        </div>
+        <button class="btn btn-close" onclick="closePositions()">Close Positions</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Copy Trading -->
+  <div id="copier" class="section">
+    <div class="form-section">
+      <h3>Opposite Copy Trading</h3>
+      <p style="color: var(--muted); font-size: 13px; margin-bottom: 16px;">
+        When source account opens a BUY, target opens a SELL (and vice versa). Closing is mirrored too.
+      </p>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Source Account</label>
+          <select id="copierSource"></select>
+        </div>
+        <div class="form-group">
+          <label>Target Account</label>
+          <select id="copierTarget"></select>
+        </div>
+        <div class="form-group">
+          <label>Volume Multiplier</label>
+          <input type="number" id="copierMult" value="1.0" step="0.1" min="0.1" style="width:80px">
+        </div>
+        <button class="btn btn-buy" id="btnCopierStart" onclick="startCopier()">Start</button>
+        <button class="btn btn-sell" id="btnCopierStop" onclick="stopCopier()" disabled>Stop</button>
+      </div>
+      <div id="copierStatus" style="margin-top: 12px; font-size: 13px; color: var(--muted);"></div>
+    </div>
+
+    <div class="table-wrap">
+      <div class="table-header">
+        <h3>Activity Log</h3>
+        <button class="btn btn-primary btn-sm" onclick="refreshCopierStatus()">Refresh</button>
+      </div>
+      <div id="copierLog" style="max-height: 400px; overflow-y: auto; padding: 12px 20px; font-family: monospace; font-size: 13px; line-height: 1.8;">
+        <span style="color: var(--muted);">Copier not started.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manage Accounts -->
+  <div id="accounts" class="section">
+    <div class="form-section">
+      <h3>Step 1: Find Broker Installer</h3>
+      <p style="color: var(--muted); font-size: 13px; margin-bottom: 16px;">
+        Search for the broker's MT5 installer on the MQL5 CDN, then download it to the VPS.
+      </p>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Broker Name</label>
+          <input type="text" id="brokerName" placeholder="e.g. AquaFunded, FTMO, Five Percent Online" style="min-width: 280px;">
+        </div>
+        <button class="btn btn-primary" id="btnSearch" onclick="searchInstaller()">Search</button>
+      </div>
+      <div id="searchResults" style="margin-top: 12px;"></div>
+      <div id="installerList" style="margin-top: 12px;"></div>
+    </div>
+
+    <div class="form-section">
+      <h3>Step 2: Add Trading Account</h3>
+      <p style="color: var(--muted); font-size: 13px; margin-bottom: 16px;">
+        Enter your account credentials. Select an installer to auto-install MT5, or leave blank if already installed.
+      </p>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Login</label>
+          <input type="text" id="addLogin" placeholder="123456">
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="addPassword" placeholder="Account password">
+        </div>
+        <div class="form-group">
+          <label>Server</label>
+          <input type="text" id="addServer" placeholder="BrokerName-Server">
+        </div>
+        <div class="form-group">
+          <label>Installer on VPS</label>
+          <select id="addInstaller" style="min-width: 250px;">
+            <option value="">None (already installed)</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="btnAddAccount" onclick="addAccount()">Add Account</button>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <div class="table-header">
+        <h3>Registered Accounts</h3>
+      </div>
+      <table>
+        <thead><tr><th>Login</th><th>Server</th><th>Install Dir</th><th></th></tr></thead>
+        <tbody id="accountsTable"><tr><td colspan="4" class="loading"><span class="spinner"></span>Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toasts"></div>
+
+<script>
+const API = window.location.origin;
+let accounts = {};
+let refreshInterval = null;
+
+// --- Tabs ---
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.tab).classList.add('active');
+  });
+});
+
+// --- Toast ---
+function toast(msg, type = 'success') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// --- API helpers ---
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  return res.json();
+}
+
+// --- Load accounts ---
+async function loadAccounts() {
+  try {
+    accounts = await api('/accounts');
+    const keys = Object.keys(accounts);
+    document.getElementById('connectionStatus').textContent = `${keys.length} account(s) connected`;
+    document.getElementById('connectionStatus').className = 'status online';
+
+    // Populate dropdowns
+    ['tradeAccount', 'closeAccount', 'copierSource', 'copierTarget'].forEach(id => {
+      const sel = document.getElementById(id);
+      const prev = sel.value;
+      sel.innerHTML = keys.map(k => `<option value="${k}">${accounts[k].account_id} (${k})</option>`).join('');
+      if (prev) sel.value = prev;
+    });
+
+    // Accounts management table
+    const tbody = document.getElementById('accountsTable');
+    if (keys.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">No accounts registered</td></tr>';
+    } else {
+      tbody.innerHTML = keys.map(k => {
+        const a = accounts[k];
+        return `<tr>
+          <td><strong>${a.login}</strong></td>
+          <td>${a.server}</td>
+          <td style="font-size:12px;color:var(--muted)">${a.install_dir}</td>
+          <td><button class="btn btn-sell btn-sm" onclick="removeAccount('${a.login}')">Remove</button></td>
+        </tr>`;
+      }).join('');
+    }
+  } catch (e) {
+    document.getElementById('connectionStatus').textContent = 'Disconnected';
+    document.getElementById('connectionStatus').className = 'status';
+  }
+}
+
+// --- Load all account info + positions via single endpoint ---
+let refreshing = false;
+async function refreshAll() {
+  if (refreshing) return;
+  refreshing = true;
+
+  const keys = Object.keys(accounts);
+  if (keys.length === 0) {
+    document.getElementById('accountCards').innerHTML = '<div class="empty">No accounts registered. Add one in the Manage Accounts tab.</div>';
+    document.getElementById('positionsTable').innerHTML = '<tr><td colspan="10" class="empty">No accounts</td></tr>';
+    refreshing = false;
+    return;
+  }
+
+  try {
+    const data = await api('/dashboard/data');
+    const cardsEl = document.getElementById('accountCards');
+    const posEl = document.getElementById('positionsTable');
+    let allPositions = [];
+    let cardsHtml = '';
+
+    for (const [key, entry] of Object.entries(data)) {
+      const info = entry.info;
+      const pos = entry.positions;
+      const ok = info.status === 'OK';
+      const balance = ok ? parseFloat(info.balance || 0) : 0;
+      const equity = ok ? parseFloat(info.equity || 0) : 0;
+      const freeMargin = ok ? parseFloat(info.free_margin || 0) : 0;
+      const pnl = equity - balance;
+      const pnlClass = pnl >= 0 ? 'profit' : 'loss';
+
+      cardsHtml += `
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">${entry.account_id}</span>
+            <span class="card-badge ${ok ? 'connected' : ''}">${ok ? 'Connected' : 'Offline'}</span>
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:12px">${key}</div>
+          <div class="card-stats">
+            <div><div class="stat-label">Balance</div><div class="stat-value">$${balance.toFixed(2)}</div></div>
+            <div><div class="stat-label">Equity</div><div class="stat-value">$${equity.toFixed(2)}</div></div>
+            <div><div class="stat-label">P&L</div><div class="stat-value ${pnlClass}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</div></div>
+            <div><div class="stat-label">Free Margin</div><div class="stat-value">$${freeMargin.toFixed(2)}</div></div>
+          </div>
+        </div>`;
+
+      if (pos.positions) {
+        pos.positions.forEach(p => {
+          allPositions.push({ ...p, accountId: entry.account_id, server: entry.server, login: entry.login });
+        });
+      }
+    }
+
+    cardsEl.innerHTML = cardsHtml || '<div class="empty">No accounts</div>';
+
+    if (allPositions.length === 0) {
+      posEl.innerHTML = '<tr><td colspan="10" class="empty">No open positions</td></tr>';
+    } else {
+      posEl.innerHTML = allPositions.map(p => {
+        const profit = parseFloat(p.profit || 0);
+        const profitClass = profit >= 0 ? 'profit' : 'loss';
+        const typeClass = p.type === 'BUY' ? 'type-buy' : 'type-sell';
+        return `<tr>
+          <td>${p.accountId}</td>
+          <td style="font-size:12px;color:var(--muted)">${p.pos}</td>
+          <td><strong>${p.symbol}</strong></td>
+          <td class="${typeClass}">${p.type}</td>
+          <td>${p.volume}</td>
+          <td>${p.price}</td>
+          <td class="${profitClass}">${profit >= 0 ? '+' : ''}$${profit.toFixed(2)}</td>
+          <td>${parseFloat(p.sl || 0) > 0 ? p.sl : '-'}</td>
+          <td>${parseFloat(p.tp || 0) > 0 ? p.tp : '-'}</td>
+          <td><button class="btn btn-close btn-sm" onclick="closeSymbol('${p.server}','${p.login}','${p.symbol}')">Close</button></td>
+        </tr>`;
+      }).join('');
+    }
+  } catch (e) {
+    console.error('Refresh failed:', e);
+  }
+
+  refreshing = false;
+}
+
+// --- Trade ---
+async function executeTrade(side) {
+  const account = document.getElementById('tradeAccount').value;
+  if (!account) { toast('Select an account', 'error'); return; }
+  const [server, login] = account.split('/');
+  const symbol = document.getElementById('tradeSymbol').value.trim().toUpperCase();
+  const volume = parseFloat(document.getElementById('tradeVolume').value);
+  const sl = parseFloat(document.getElementById('tradeSL').value);
+  const tp = parseFloat(document.getElementById('tradeTP').value);
+
+  if (!symbol) { toast('Enter a symbol', 'error'); return; }
+  if (volume <= 0) { toast('Volume must be > 0', 'error'); return; }
+
+  document.getElementById('btnBuy').disabled = true;
+  document.getElementById('btnSell').disabled = true;
+
+  try {
+    const result = await api(`/accounts/${server}/${login}/${side}`, {
+      method: 'POST',
+      body: JSON.stringify({ symbol, volume, sl, tp, comment: 'dashboard' }),
+    });
+    if (result.status === 'OK') {
+      toast(`${side.toUpperCase()} ${volume} ${symbol} @ ${result.price || 'market'} — Deal #${result.deal || '?'}`);
+      refreshAll();
+    } else {
+      toast(`Trade failed: ${result.message || result.raw || JSON.stringify(result)}`, 'error');
+    }
+  } catch (e) {
+    toast(`Error: ${e.message}`, 'error');
+  }
+
+  document.getElementById('btnBuy').disabled = false;
+  document.getElementById('btnSell').disabled = false;
+}
+
+// --- Close ---
+async function closePositions() {
+  const account = document.getElementById('closeAccount').value;
+  if (!account) { toast('Select an account', 'error'); return; }
+  const [server, login] = account.split('/');
+  const symbol = document.getElementById('closeSymbol').value.trim().toUpperCase();
+
+  const result = await api(`/accounts/${server}/${login}/close`, {
+    method: 'POST',
+    body: JSON.stringify({ symbol }),
+  });
+  if (result.status === 'OK') {
+    toast(`Closed ${result.closed || '?'} position(s)${symbol ? ' for ' + symbol : ''}`);
+    refreshAll();
+  } else {
+    toast(`Close failed: ${result.message || result.raw}`, 'error');
+  }
+}
+
+async function closeSymbol(server, login, symbol) {
+  const result = await api(`/accounts/${server}/${login}/close`, {
+    method: 'POST',
+    body: JSON.stringify({ symbol }),
+  });
+  if (result.status === 'OK') {
+    toast(`Closed ${result.closed || '?'} ${symbol} position(s)`);
+    refreshAll();
+  } else {
+    toast(`Close failed: ${result.message || result.raw}`, 'error');
+  }
+}
+
+// --- Copier ---
+async function startCopier() {
+  const source = document.getElementById('copierSource').value;
+  const target = document.getElementById('copierTarget').value;
+  const mult = parseFloat(document.getElementById('copierMult').value) || 1.0;
+
+  if (!source || !target) { toast('Select both accounts', 'error'); return; }
+  if (source === target) { toast('Source and target must be different', 'error'); return; }
+
+  document.getElementById('btnCopierStart').disabled = true;
+  try {
+    const result = await api('/copier/start', {
+      method: 'POST',
+      body: JSON.stringify({ source, target, volume_mult: mult }),
+    });
+    if (result.status === 'OK') {
+      toast(result.message);
+      document.getElementById('btnCopierStart').disabled = true;
+      document.getElementById('btnCopierStop').disabled = false;
+      startCopierPoll();
+    } else {
+      toast(result.detail || 'Failed to start', 'error');
+      document.getElementById('btnCopierStart').disabled = false;
+    }
+  } catch (e) {
+    toast(`Error: ${e.message}`, 'error');
+    document.getElementById('btnCopierStart').disabled = false;
+  }
+}
+
+async function stopCopier() {
+  await api('/copier/stop', { method: 'POST' });
+  document.getElementById('btnCopierStart').disabled = false;
+  document.getElementById('btnCopierStop').disabled = true;
+  toast('Copier stopped');
+  refreshCopierStatus();
+}
+
+let copierPollInterval = null;
+function startCopierPoll() {
+  if (copierPollInterval) clearInterval(copierPollInterval);
+  copierPollInterval = setInterval(refreshCopierStatus, 2000);
+}
+
+async function refreshCopierStatus() {
+  try {
+    const status = await api('/copier/status');
+    const el = document.getElementById('copierStatus');
+    if (status.running) {
+      el.innerHTML = `<span style="color:var(--green)">● Running</span> — ${status.source} → ${status.target} (x${status.volume_mult}) — Tracking ${status.tracked_positions} position(s)`;
+      document.getElementById('btnCopierStart').disabled = true;
+      document.getElementById('btnCopierStop').disabled = false;
+      if (!copierPollInterval) startCopierPoll();
+    } else {
+      el.innerHTML = '<span style="color:var(--muted)">● Stopped</span>';
+      document.getElementById('btnCopierStart').disabled = false;
+      document.getElementById('btnCopierStop').disabled = true;
+      if (copierPollInterval) { clearInterval(copierPollInterval); copierPollInterval = null; }
+    }
+
+    const logEl = document.getElementById('copierLog');
+    if (status.log && status.log.length > 0) {
+      logEl.innerHTML = status.log.map(e => {
+        let color = 'var(--muted)';
+        if (e.action === 'COPIED' || e.action === 'CLOSED_TARGET') color = 'var(--green)';
+        else if (e.action === 'FAIL' || e.action === 'ERROR') color = 'var(--red)';
+        else if (e.action === 'NEW' || e.action === 'CLOSED') color = 'var(--yellow)';
+        else if (e.action === 'START') color = 'var(--accent)';
+        return `<div><span style="color:var(--muted)">${e.time}</span> <span style="color:${color};font-weight:600">[${e.action}]</span> ${e.detail}</div>`;
+      }).reverse().join('');
+      logEl.scrollTop = 0;
+    }
+  } catch (e) {}
+}
+
+// --- Installer Finder ---
+async function searchInstaller() {
+  const name = document.getElementById('brokerName').value.trim();
+  if (!name) { toast('Enter a broker name', 'error'); return; }
+
+  const btn = document.getElementById('btnSearch');
+  btn.disabled = true; btn.textContent = 'Searching...';
+  const el = document.getElementById('searchResults');
+  el.innerHTML = '<span class="spinner"></span> Searching MQL5 CDN...';
+
+  try {
+    const result = await api('/installer/search', { method: 'POST', body: JSON.stringify({ broker_name: name }) });
+    if (result.results && result.results.length > 0) {
+      el.innerHTML = result.results.map(r =>
+        `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+          <span style="font-size:13px;color:var(--green);flex:1;word-break:break-all">${r.url}</span>
+          <button class="btn btn-primary btn-sm" onclick="downloadInstaller('${r.url}', this)">Download to VPS</button>
+        </div>`
+      ).join('');
+    } else {
+      el.innerHTML = '<span style="color:var(--muted)">No installers found. Try a different name variation.</span>';
+    }
+  } catch (e) {
+    el.innerHTML = `<span style="color:var(--red)">Search failed: ${e.message}</span>`;
+  }
+  btn.disabled = false; btn.textContent = 'Search';
+}
+
+async function downloadInstaller(url, btn) {
+  btn.disabled = true; btn.textContent = 'Downloading...';
+  try {
+    const result = await api('/installer/download', { method: 'POST', body: JSON.stringify({ url }) });
+    if (result.status === 'OK') {
+      toast(`Downloaded ${result.size_mb} MB to ${result.path}`);
+      btn.textContent = 'Downloaded';
+      btn.className = 'btn btn-sm';
+      btn.style.background = 'var(--green)'; btn.style.color = '#000';
+      loadInstallers();
+    } else {
+      toast(result.detail || 'Download failed', 'error');
+      btn.disabled = false; btn.textContent = 'Download to VPS';
+    }
+  } catch (e) {
+    toast(`Download failed: ${e.message}`, 'error');
+    btn.disabled = false; btn.textContent = 'Download to VPS';
+  }
+}
+
+async function loadInstallers() {
+  const sel = document.getElementById('addInstaller');
+  const prev = sel.value;
+  try {
+    const result = await api('/installer/list');
+    sel.innerHTML = '<option value="">None (already installed)</option>';
+    if (result.installers) {
+      result.installers.forEach(i => {
+        sel.innerHTML += `<option value="${i.path}">${i.name} (${i.size_mb} MB)</option>`;
+      });
+    }
+    if (prev) sel.value = prev;
+  } catch (e) {}
+}
+
+// --- Add/Remove Account ---
+async function addAccount() {
+  const login = document.getElementById('addLogin').value.trim();
+  const password = document.getElementById('addPassword').value;
+  const server = document.getElementById('addServer').value.trim();
+  const installer = document.getElementById('addInstaller').value;
+
+  if (!login || !password || !server) { toast('Login, password, and server are required', 'error'); return; }
+
+  document.getElementById('btnAddAccount').disabled = true;
+  document.getElementById('btnAddAccount').textContent = 'Setting up...';
+
+  try {
+    const result = await api('/accounts/add', {
+      method: 'POST',
+      body: JSON.stringify({ login, password, server, installer_path: installer }),
+    });
+    if (result.status === 'OK') {
+      toast(result.message);
+      if (result.next_step) toast(result.next_step, result.has_terminal ? 'success' : 'error');
+      document.getElementById('addLogin').value = '';
+      document.getElementById('addPassword').value = '';
+      document.getElementById('addServer').value = '';
+      document.getElementById('addInstaller').value = '';
+      await loadAccounts();
+      refreshAll();
+    } else {
+      toast(result.detail || result.message || 'Failed to add account', 'error');
+    }
+  } catch (e) {
+    toast(`Error: ${e.message}`, 'error');
+  }
+
+  document.getElementById('btnAddAccount').disabled = false;
+  document.getElementById('btnAddAccount').textContent = 'Add Account';
+}
+
+async function removeAccount(login) {
+  if (!confirm(`Remove account "${login}" from the registry? (This does NOT delete the MT5 installation)`)) return;
+  const result = await api(`/accounts/${login}`, { method: 'DELETE' });
+  if (result.status === 'OK') {
+    toast(`Account ${login} removed`);
+    await loadAccounts();
+    refreshAll();
+  } else {
+    toast(result.message || 'Failed', 'error');
+  }
+}
+
+// --- Auto-refresh ---
+function startRefresh() {
+  if (refreshInterval) clearInterval(refreshInterval);
+  refreshInterval = setInterval(() => {
+    if (document.getElementById('autoRefresh').checked) refreshAll();
+  }, 5000);
+}
+
+document.getElementById('autoRefresh').addEventListener('change', e => {
+  if (!e.target.checked && refreshInterval) clearInterval(refreshInterval);
+  else startRefresh();
+});
+
+// --- Init ---
+(async () => {
+  await loadAccounts();
+  await refreshAll();
+  loadInstallers();
+  refreshCopierStatus();
+  startRefresh();
+})();
+</script>
+</body>
+</html>
