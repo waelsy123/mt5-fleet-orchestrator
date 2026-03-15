@@ -109,7 +109,7 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
           password: accountForm.password,
           server: accountForm.server,
           broker: accountForm.broker || undefined,
-          installerUrl: accountForm.installerUrl || undefined,
+          installer_url: accountForm.installerUrl || undefined,
         }),
       });
       if (!res.ok) {
@@ -206,13 +206,11 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-zinc-100">Accounts</CardTitle>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger
-              render={
-                <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white" />
-              }
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              Add Account
+            <DialogTrigger>
+              <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white">
+                <Plus className="mr-2 h-4 w-4" />
+                Add Account
+              </Button>
             </DialogTrigger>
             <DialogContent className="border-zinc-700 bg-zinc-900">
               <DialogHeader>

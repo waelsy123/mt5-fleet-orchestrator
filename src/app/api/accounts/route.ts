@@ -9,7 +9,12 @@ export async function GET() {
       },
       orderBy: { createdAt: "desc" },
     });
-    return NextResponse.json(accounts);
+    const result = accounts.map((a) => ({
+      ...a,
+      vpsName: a.vps.name,
+      vps: undefined,
+    }));
+    return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

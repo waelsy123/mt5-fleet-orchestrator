@@ -22,7 +22,7 @@ interface DashboardData {
   onlineVps: number;
   totalAccounts: number;
   totalEquity: number;
-  vpsList: VpsSummary[];
+  vps: VpsSummary[];
 }
 
 function statusBadge(status: string) {
@@ -112,7 +112,7 @@ export default function DashboardPage() {
 
       <h2 className="text-lg font-semibold text-zinc-100">VPS Fleet</h2>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {data.vpsList.map((vps) => (
+        {data.vps.map((vps) => (
           <Link key={vps.id} href={`/vps/${vps.id}`}>
             <Card className="border-zinc-700 bg-zinc-900 transition-colors hover:border-zinc-600 hover:bg-zinc-800/80 cursor-pointer">
               <CardHeader className="pb-3">

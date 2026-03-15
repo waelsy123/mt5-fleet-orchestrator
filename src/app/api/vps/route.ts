@@ -7,7 +7,12 @@ export async function GET() {
       include: { _count: { select: { accounts: true } } },
       orderBy: { createdAt: "desc" },
     });
-    return NextResponse.json(vpsList);
+    const result = vpsList.map((v) => ({
+      ...v,
+      accountCount: v._count.accounts,
+      _count: undefined,
+    }));
+    return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
