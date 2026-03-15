@@ -1,11 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { VpsClient } from "@/lib/vps-client";
-
-async function getClient(vpsId: string) {
-  const vps = await prisma.vps.findUniqueOrThrow({ where: { id: vpsId } });
-  return { client: new VpsClient({ ip: vps.ip, apiPort: vps.apiPort }), vps };
-}
+import { startAccountSetup } from "@/lib/account-setup";
 
 export async function GET(
   _request: NextRequest,
@@ -34,8 +29,9 @@ export async function POST(
     const { login, password, server, broker, installer_url, installer_path } =
       body;
 
-    const { client } = await getClient(vpsId);
-    const result = await client.addAccount({
+    const vps = await prisma.vps.findUniqueOrThrow({ where: { id: vpsId } });
+
+    const jobId = startAccountSetup(vps.id, vps.ip, vps.apiPort, {
       login,
       password,
       server,
@@ -44,20 +40,7 @@ export async function POST(
       installer_path,
     });
 
-    await prisma.account.upsert({
-      where: { vpsId_server_login: { vpsId, server, login } },
-      create: {
-        vpsId,
-        login,
-        server,
-        broker: broker ?? null,
-      },
-      update: {
-        broker: broker ?? undefined,
-      },
-    });
-
-    return NextResponse.json(result);
+    return NextResponse.json({ jobId, message: "Account setup started" });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
