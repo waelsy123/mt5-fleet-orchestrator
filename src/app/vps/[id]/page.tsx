@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Plus, Trash2, Play } from "lucide-react";
+import { Plus, Trash2, Play, RefreshCw } from "lucide-react";
 import { formatCurrency, formatProfit, profitColor } from "@/lib/format";
 
 interface Account {
@@ -77,6 +77,7 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
     installerUrl: "",
   });
   const [submitting, setSubmitting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   async function fetchVps() {
     try {
@@ -138,6 +139,21 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  async function handleSync() {
+    setSyncing(true);
+    try {
+      const res = await fetch(`/api/vps/${id}/sync`, { method: "POST" });
+      if (!res.ok) throw new Error("Failed to sync accounts");
+      const data = await res.json();
+      toast.success(`Synced ${data.synced} account(s) from VPS`);
+      fetchVps();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -165,6 +181,15 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
           <p className="text-sm text-zinc-400 font-mono">{vps.ip}</p>
         </div>
         <div className="flex gap-2">
+          <Button
+            onClick={handleSync}
+            disabled={syncing}
+            variant="ghost"
+            className="text-blue-500 hover:text-blue-400 hover:bg-blue-500/10"
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? "Syncing..." : "Sync Accounts"}
+          </Button>
           {(vps.status === "PENDING" || vps.status === "ERROR") && (
             <Link href={`/vps/${id}/provision`}>
               <Button className="bg-blue-600 hover:bg-blue-700 text-white">

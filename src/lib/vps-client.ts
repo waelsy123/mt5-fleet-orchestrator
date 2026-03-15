@@ -8,7 +8,7 @@ import type {
   VpsPositions,
 } from "./types";
 
-const TIMEOUT_MS = 5000;
+const DEFAULT_TIMEOUT_MS = 5000;
 
 export class VpsClient {
   private baseUrl: string;
@@ -19,10 +19,11 @@ export class VpsClient {
 
   private async request<T = unknown>(
     path: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    timeoutMs: number = DEFAULT_TIMEOUT_MS
   ): Promise<T> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
@@ -68,7 +69,7 @@ export class VpsClient {
           positions: { status: string; positions?: unknown[] };
         }
       >
-    >("/dashboard/data");
+    >("/dashboard/data", {}, 60_000);
 
     const accounts: VpsDashboardAccount[] = Object.values(raw).map((acct) => ({
       login: acct.login,
@@ -87,7 +88,9 @@ export class VpsClient {
     return { status: "ok", accounts };
   }
 
-  async getAccounts(): Promise<unknown> {
+  async getAccounts(): Promise<
+    Record<string, { account_id: string; login: string; server: string; install_dir: string; files_dir: string }>
+  > {
     return this.request("/accounts");
   }
 
@@ -95,7 +98,7 @@ export class VpsClient {
     return this.request("/accounts/add", {
       method: "POST",
       body: JSON.stringify(req),
-    });
+    }, 300_000); // 5 min — downloads + installs MT5
   }
 
   async removeAccount(login: string): Promise<unknown> {
