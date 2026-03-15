@@ -78,6 +78,9 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
   });
   const [submitting, setSubmitting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [serverResults, setServerResults] = useState<{ server: string; installer_url: string }[]>([]);
+  const [serverDropdownOpen, setServerDropdownOpen] = useState(false);
+  const [serverSearchTimeout, setServerSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
   const [setupJobId, setSetupJobId] = useState<string | null>(null);
   const [setupSteps, setSetupSteps] = useState<string[]>([]);
   const [setupStatus, setSetupStatus] = useState<"idle" | "running" | "success" | "failed">("idle");
@@ -162,12 +165,48 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  function handleServerSearch(value: string) {
+    setAccountForm((p) => ({ ...p, server: value }));
+    if (serverSearchTimeout) clearTimeout(serverSearchTimeout);
+    if (value.length < 2) {
+      setServerResults([]);
+      setServerDropdownOpen(false);
+      return;
+    }
+    const timeout = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/servers/search?q=${encodeURIComponent(value)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setServerResults(data.results || []);
+        setServerDropdownOpen((data.results || []).length > 0);
+      } catch {
+        setServerDropdownOpen(false);
+      }
+    }, 300);
+    setServerSearchTimeout(timeout);
+  }
+
+  function selectServer(server: string, installerUrl: string) {
+    setAccountForm((p) => ({
+      ...p,
+      server,
+      installerUrl: installerUrl || p.installerUrl,
+    }));
+    setServerDropdownOpen(false);
+    if (installerUrl) {
+      toast.success(`Installer auto-detected for ${server}`);
+    }
+  }
+
   function resetSetupDialog() {
     setDialogOpen(false);
     setSetupJobId(null);
     setSetupSteps([]);
     setSetupStatus("idle");
     setAccountForm({ login: "", password: "", server: "", broker: "", installerUrl: "" });
+    setServerResults([]);
+    setServerDropdownOpen(false);
   }
 
   async function handleDelete() {
@@ -318,32 +357,44 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
                       className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label className="text-zinc-300">Server</Label>
+                  <div className="space-y-2 relative">
+                    <Label className="text-zinc-300">Server (type to search)</Label>
                     <Input
                       value={accountForm.server}
-                      onChange={(e) => setAccountForm((p) => ({ ...p, server: e.target.value }))}
+                      onChange={(e) => handleServerSearch(e.target.value)}
+                      onFocus={() => { if (serverResults.length > 0) setServerDropdownOpen(true); }}
+                      onBlur={() => setTimeout(() => setServerDropdownOpen(false), 200)}
                       required
+                      autoComplete="off"
                       className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
-                      placeholder="e.g. FivePercentOnline-Real"
+                      placeholder="Type broker name, e.g. aqua, ftmo..."
                     />
+                    {serverDropdownOpen && serverResults.length > 0 && (
+                      <div className="absolute z-50 top-full left-0 right-0 mt-1 max-h-[200px] overflow-y-auto rounded-md border border-zinc-600 bg-zinc-800 shadow-lg">
+                        {serverResults.map((r) => (
+                          <button
+                            key={r.server}
+                            type="button"
+                            className="w-full text-left px-3 py-2 text-sm text-zinc-200 hover:bg-blue-600 hover:text-white border-b border-zinc-700 last:border-b-0 flex items-center justify-between"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => selectServer(r.server, r.installer_url)}
+                          >
+                            <span>{r.server}</span>
+                            {r.installer_url && (
+                              <span className="text-xs text-emerald-400 ml-2">&#10003; installer</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-zinc-300">Broker (optional)</Label>
-                    <Input
-                      value={accountForm.broker}
-                      onChange={(e) => setAccountForm((p) => ({ ...p, broker: e.target.value }))}
-                      className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
-                      placeholder="e.g. aquafunded"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-zinc-300">Installer URL (optional)</Label>
+                    <Label className="text-zinc-300">Installer URL {accountForm.installerUrl ? "" : "(optional)"}</Label>
                     <Input
                       value={accountForm.installerUrl}
                       onChange={(e) => setAccountForm((p) => ({ ...p, installerUrl: e.target.value }))}
                       className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
-                      placeholder="https://download.mql5.com/cdn/web/..."
+                      placeholder={accountForm.installerUrl ? "" : "Auto-detected when you select a server"}
                     />
                   </div>
                   <div className="flex gap-3 pt-2">

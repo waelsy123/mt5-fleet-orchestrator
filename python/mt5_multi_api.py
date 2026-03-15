@@ -22,6 +22,11 @@ BROKERS_FILE = Path(__file__).parent / "brokers.json"
 TIMEOUT = 15
 STATIC_DIR = Path(__file__).parent / "static"
 
+# Cached MetaQuotes MT5 server list
+_mt5_servers_cache: list[str] = []
+_mt5_servers_cache_time: float = 0
+MT5_SERVERS_CACHE_TTL = 3600  # 1 hour
+
 app = FastAPI(
     title="MT5 Multi-Account API",
     description="Trade on multiple MetaTrader 5 accounts via file-based bridge (PythonBridge EA).",
@@ -234,19 +239,8 @@ def _download_file(url: str, dest: str):
                 f.write(chunk)
 
 
-def _find_terminal_for_server(server: str) -> str | None:
-    """Find an existing terminal64.exe from another account on the same broker server."""
-    accounts = load_accounts()
-    for key, acc in accounts.items():
-        if acc["server"] == server:
-            terminal = os.path.join(acc["install_dir"], "terminal64.exe")
-            if os.path.exists(terminal):
-                return terminal
-    return None
-
-
 def _find_installed_terminal() -> str | None:
-    """Find terminal64.exe in common install locations after running an installer."""
+    """Find terminal64.exe in common install locations."""
     search_dirs = [
         r"C:\Program Files",
         r"C:\Program Files (x86)",
@@ -261,42 +255,56 @@ def _find_installed_terminal() -> str | None:
     return None
 
 
-def _install_terminal(install_dir: str, installer_path: str):
-    """Run MT5 installer and copy terminal to portable directory.
-
-    MT5 installers ignore /dir: flag and install to Program Files.
-    So we run the installer, find where it went, and copy everything.
-    """
-    # Run installer silently
+def _install_terminal(installer_path: str) -> str | None:
+    """Run MT5 installer silently. Returns path to terminal64.exe or None."""
     subprocess.run(
         ["powershell", "-Command",
          f'Start-Process -FilePath "{installer_path}" -ArgumentList "/auto" -Wait'],
         timeout=180,
         capture_output=True,
     )
-
-    # Find where it installed
-    installed = _find_installed_terminal()
-    if not installed:
-        return False
-
-    src_dir = os.path.dirname(installed)
-    # Copy entire installation to portable dir
-    if os.path.normpath(src_dir) != os.path.normpath(install_dir):
-        shutil.copytree(src_dir, install_dir, dirs_exist_ok=True)
-
-    return True
+    return _find_installed_terminal()
 
 
-def _start_terminal(install_dir: str, login: str):
-    """Create scheduled task and start the terminal."""
+def _get_data_dir() -> str | None:
+    """Find the non-portable terminal data directory under AppData.
+
+    After a terminal runs, it creates a hash-named folder under
+    AppData/Roaming/MetaQuotes/Terminal/. We find the most recently
+    modified one (excluding Common/Community).
+    """
+    base = os.path.join(os.environ.get("APPDATA", ""), "MetaQuotes", "Terminal")
+    if not os.path.isdir(base):
+        return None
+    best = None
+    best_time = 0
+    for entry in os.listdir(base):
+        if entry in ("Common", "Community"):
+            continue
+        full = os.path.join(base, entry)
+        if os.path.isdir(full):
+            mtime = os.path.getmtime(full)
+            if mtime > best_time:
+                best_time = mtime
+                best = full
+    return best
+
+
+def _start_terminal(terminal_path: str, ini_path: str, login: str):
+    """Create scheduled task and start the terminal (non-portable mode).
+
+    Uses a .bat launcher to avoid quoting issues with schtasks.
+    Does NOT use /portable — portable mode has a connection bug on build 5687+.
+    """
     task_name = f"StartMT5_{login}"
-    terminal = os.path.join(install_dir, "terminal64.exe")
-    ini = os.path.join(install_dir, "startup.ini")
+    bat_path = os.path.join(BASE_DIR, f"launch_{login}.bat")
+
+    with open(bat_path, "w") as f:
+        f.write(f'"{terminal_path}" /config:"{ini_path}"\r\n')
 
     subprocess.run(
         ["schtasks", "/Create", "/TN", task_name,
-         "/TR", f'"{terminal}" /portable /config:"{ini}"',
+         "/TR", bat_path,
          "/SC", "ONLOGON", "/RL", "HIGHEST", "/F"],
         capture_output=True, timeout=30,
     )
@@ -307,9 +315,10 @@ def _start_terminal(install_dir: str, login: str):
 
 
 def _wait_for_ea(files_dir: str, timeout: int = 60) -> bool:
-    """Wait for the PythonBridge EA to start responding."""
+    """Wait for the PythonBridge EA to start responding.
+    Uses POSITIONS instead of INFO — INFO has a bug in some EA versions."""
     for _ in range(timeout // 3):
-        result = send_command(files_dir, "INFO|EURUSD", timeout=3)
+        result = send_command(files_dir, "POSITIONS|EURUSD", timeout=3)
         if result.get("status") == "OK":
             return True
         time.sleep(3)
@@ -318,17 +327,17 @@ def _wait_for_ea(files_dir: str, timeout: int = 60) -> bool:
 
 @app.post("/accounts/add", summary="Add a new trading account (fully automated setup)")
 def add_account(req: AddAccountRequest):
-    """Fully automated account setup:
+    """Fully automated account setup (non-portable mode):
 
-    1. Gets terminal (from existing account on same server, installer URL, or local installer)
-    2. Creates portable directory with configs and PythonBridge EA
-    3. Registers account, creates scheduled task, starts terminal
-    4. Waits for EA to connect and verifies broker connection
+    1. Finds or installs terminal in Program Files
+    2. Writes startup.ini and common.ini to C:\\MT5\\{login}\\
+    3. Starts terminal, waits for AppData data dir to appear
+    4. Copies PythonBridge EA to AppData MQL5\\Experts
+    5. Restarts terminal, waits for EA, verifies broker connection
     """
     # ── Resolve broker config ────────────────────────────────────────────
     if req.broker:
         brokers = load_brokers()
-        # Match by key or by name (case-insensitive)
         broker_cfg = brokers.get(req.broker)
         if not broker_cfg:
             for k, v in brokers.items():
@@ -346,63 +355,49 @@ def add_account(req: AddAccountRequest):
     if not req.server:
         raise HTTPException(status_code=400, detail="server is required (or provide broker name)")
 
-    install_dir = os.path.join(BASE_DIR, req.login)
-    files_dir = os.path.join(install_dir, "MQL5", "Files")
-    experts_dir = os.path.join(install_dir, "MQL5", "Experts")
-    config_dir = os.path.join(install_dir, "config")
-    terminal_path = os.path.join(install_dir, "terminal64.exe")
+    # Config dir: C:\MT5\{login}\ (just configs, NOT a portable install)
+    config_base = os.path.join(BASE_DIR, req.login)
+    config_dir = os.path.join(config_base, "config")
+    ini_path = os.path.join(config_base, "startup.ini")
     steps = []
 
-    # ── Step 1: Get terminal binary ──────────────────────────────────────
-    if os.path.exists(terminal_path):
-        steps.append("Terminal already exists")
+    # ── Step 1: Get terminal binary (in Program Files) ───────────────────
+    terminal_path = _find_installed_terminal()
+    if terminal_path:
+        steps.append(f"Using existing terminal: {terminal_path}")
     else:
-        # Try reusing terminal from another account on the same server
-        existing = _find_terminal_for_server(req.server)
-        if existing:
-            existing_dir = os.path.dirname(existing)
-            shutil.copytree(existing_dir, install_dir, dirs_exist_ok=True)
-            steps.append(f"Copied terminal from existing account ({existing_dir})")
-        else:
-            # Download installer if URL provided
-            installer_path = req.installer_path
-            if req.installer_url and not installer_path:
-                filename = req.installer_url.split("/")[-1]
-                installer_path = os.path.join(BASE_DIR, filename)
-                if not os.path.exists(installer_path):
-                    try:
-                        _download_file(req.installer_url, installer_path)
-                        steps.append(f"Downloaded installer ({os.path.getsize(installer_path) // 1024 // 1024}MB)")
-                    except Exception as e:
-                        raise HTTPException(status_code=400, detail=f"Download failed: {e}")
-                else:
-                    steps.append("Installer already downloaded")
-
-            if installer_path:
-                if not os.path.exists(installer_path):
-                    raise HTTPException(status_code=400, detail=f"Installer not found: {installer_path}")
-                if _install_terminal(install_dir, installer_path):
-                    steps.append("Installed terminal from installer")
-                else:
-                    raise HTTPException(status_code=500, detail="Installer ran but terminal64.exe not found")
+        # Download installer if URL provided
+        installer_path = req.installer_path
+        if req.installer_url and not installer_path:
+            filename = req.installer_url.split("/")[-1]
+            installer_path = os.path.join(BASE_DIR, filename)
+            if not os.path.exists(installer_path):
+                try:
+                    _download_file(req.installer_url, installer_path)
+                    steps.append(f"Downloaded installer ({os.path.getsize(installer_path) // 1024 // 1024}MB)")
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Download failed: {e}")
             else:
-                raise HTTPException(
-                    status_code=400,
-                    detail="No terminal available. Provide installer_url or installer_path, "
-                           "or add another account on the same server first.",
-                )
+                steps.append("Installer already downloaded")
 
-    # ── Step 2: Create directories and configs ───────────────────────────
-    for d in [files_dir, experts_dir, config_dir]:
-        os.makedirs(d, exist_ok=True)
+        if installer_path:
+            if not os.path.exists(installer_path):
+                raise HTTPException(status_code=400, detail=f"Installer not found: {installer_path}")
+            terminal_path = _install_terminal(installer_path)
+            if terminal_path:
+                steps.append(f"Installed terminal: {terminal_path}")
+            else:
+                raise HTTPException(status_code=500, detail="Installer ran but terminal64.exe not found")
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="No terminal available. Provide installer_url or installer_path.",
+            )
 
-    # Copy PythonBridge EA
-    ea_source = Path(__file__).parent / "PythonBridge.mq5"
-    if ea_source.exists():
-        shutil.copy2(str(ea_source), os.path.join(experts_dir, "PythonBridge.mq5"))
+    # ── Step 2: Write configs to C:\MT5\{login}\ ────────────────────────
+    os.makedirs(config_dir, exist_ok=True)
 
-    # Create startup.ini
-    with open(os.path.join(install_dir, "startup.ini"), "w", newline="") as f:
+    with open(ini_path, "w", newline="") as f:
         f.write(
             f"[Common]\r\n"
             f"Login={req.login}\r\n"
@@ -420,7 +415,6 @@ def add_account(req: AddAccountRequest):
             f"Period=H1\r\n"
         )
 
-    # Create common.ini
     with open(os.path.join(config_dir, "common.ini"), "w", newline="") as f:
         f.write(
             "[Common]\r\n"
@@ -439,59 +433,92 @@ def add_account(req: AddAccountRequest):
         )
     steps.append("Configs created")
 
-    # ── Step 3: Register account ─────────────────────────────────────────
+    # ── Step 3: First launch — creates AppData data dir ──────────────────
+    subprocess.run(["taskkill", "/f", "/im", "terminal64.exe"],
+                   capture_output=True, timeout=10)
+    time.sleep(2)
+
+    _start_terminal(terminal_path, ini_path, req.login)
+    steps.append("Terminal started (first run — creating data dir, compiling EA)")
+
+    # Wait for AppData data dir to appear
+    time.sleep(20)
+    data_dir = _get_data_dir()
+    if not data_dir:
+        # Give it more time
+        time.sleep(20)
+        data_dir = _get_data_dir()
+    if not data_dir:
+        steps.append("WARNING: AppData data dir not found — terminal may not have started")
+        return {
+            "status": "ERROR",
+            "message": f"Terminal data directory not created",
+            "connected": False,
+            "steps": steps,
+        }
+
+    files_dir = os.path.join(data_dir, "MQL5", "Files")
+    experts_dir = os.path.join(data_dir, "MQL5", "Experts")
+    os.makedirs(files_dir, exist_ok=True)
+    os.makedirs(experts_dir, exist_ok=True)
+    steps.append(f"Data dir: {data_dir}")
+
+    # ── Step 4: Copy PythonBridge EA and restart ─────────────────────────
+    ea_source = Path(__file__).parent / "PythonBridge.mq5"
+    if ea_source.exists():
+        shutil.copy2(str(ea_source), os.path.join(experts_dir, "PythonBridge.mq5"))
+        steps.append("Copied PythonBridge EA to data dir")
+
+    # Also copy common.ini to data dir config
+    data_config = os.path.join(data_dir, "config")
+    os.makedirs(data_config, exist_ok=True)
+    shutil.copy2(os.path.join(config_dir, "common.ini"), os.path.join(data_config, "common.ini"))
+
+    # Restart terminal so it picks up the EA
+    subprocess.run(["taskkill", "/f", "/im", "terminal64.exe"],
+                   capture_output=True, timeout=10)
+    time.sleep(3)
+    _start_terminal(terminal_path, ini_path, req.login)
+    steps.append("Terminal restarted with EA")
+
+    # ── Step 5: Wait for EA ──────────────────────────────────────────────
+    time.sleep(15)
+    if _wait_for_ea(files_dir, timeout=30):
+        steps.append("EA connected")
+    else:
+        steps.append("WARNING: EA not responding — check terminal logs")
+
+    # ── Step 6: Register account with data dir path ──────────────────────
     path = registry_path()
     lines = []
     if os.path.exists(path):
         with open(path, "r") as f:
             lines = [l.strip() for l in f if l.strip()]
     lines = [l for l in lines if not l.startswith(f"{req.login}|")]
-    lines.append(f"{req.login}|{req.login}|{req.server}|{install_dir}")
+    lines.append(f"{req.login}|{req.login}|{req.server}|{data_dir}")
     save_accounts_raw(lines)
     steps.append("Account registered")
 
-    # ── Step 4: Start terminal ───────────────────────────────────────────
-    # Kill any existing instance for this account
-    subprocess.run(["taskkill", "/f", "/im", "terminal64.exe"],
-                   capture_output=True, timeout=10)
-    time.sleep(2)
-
-    _start_terminal(install_dir, req.login)
-    steps.append("Terminal started (first run — compiling EA)")
-
-    # ── Step 5: Wait for EA, restart if needed ───────────────────────────
-    # First run: terminal recompiles all MQL5 files and may miss the EA.
-    # Wait 20s for compilation, then check. If EA not responding, restart.
-    time.sleep(20)
-
-    if _wait_for_ea(files_dir, timeout=15):
-        steps.append("EA connected on first run")
-    else:
-        # Restart terminal (EA is now compiled from first run)
-        steps.append("EA not ready — restarting terminal")
-        subprocess.run(["taskkill", "/f", "/im", "terminal64.exe"],
-                       capture_output=True, timeout=10)
-        time.sleep(3)
-        _start_terminal(install_dir, req.login)
-        time.sleep(15)
-
-        if _wait_for_ea(files_dir, timeout=30):
-            steps.append("EA connected after restart")
-        else:
-            steps.append("WARNING: EA not responding — check terminal logs")
-
-    # ── Step 6: Verify broker connection ─────────────────────────────────
-    result = send_command(files_dir, f"INFO|EURUSD", timeout=10)
+    # ── Step 7: Verify broker connection ─────────────────────────────────
+    result = send_command(files_dir, "POSITIONS|EURUSD", timeout=10)
     connected = result.get("status") == "OK"
     if connected:
-        steps.append(f"Connected to {req.server} — balance: {result.get('balance', '?')}")
+        steps.append(f"Connected to {req.server}")
     else:
-        steps.append(f"WARNING: Not connected to broker ({result.get('message', 'timeout')})")
+        # Try QUOTE as fallback verification
+        result2 = send_command(files_dir, "QUOTE|EURUSD", timeout=10)
+        connected = result2.get("status") == "OK"
+        if connected:
+            steps.append(f"Connected to {req.server} (quotes active)")
+            result = result2
+        else:
+            steps.append(f"WARNING: Not connected to broker ({result.get('message', 'timeout')})")
 
     return {
         "status": "OK" if connected else "PARTIAL",
-        "message": f"Account {req.login} set up at {install_dir}",
-        "install_dir": install_dir,
+        "message": f"Account {req.login} set up (non-portable mode)",
+        "data_dir": data_dir,
+        "terminal_path": terminal_path,
         "connected": connected,
         "steps": steps,
         "account_info": result if connected else None,
@@ -566,6 +593,53 @@ def list_installers():
                 full = os.path.join(BASE_DIR, f)
                 installers.append({"name": f, "path": full, "size_mb": round(os.path.getsize(full) / 1024 / 1024, 1)})
     return {"installers": installers}
+
+
+def _fetch_mt5_servers() -> list[str]:
+    """Fetch and cache the full MT5 server list from MetaQuotes directory."""
+    global _mt5_servers_cache, _mt5_servers_cache_time
+    if _mt5_servers_cache and (time.time() - _mt5_servers_cache_time) < MT5_SERVERS_CACHE_TTL:
+        return _mt5_servers_cache
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(
+            "https://metatraderweb.app/trade/servers?version=5",
+            headers={"User-Agent": "MT5API/1.0"},
+        )
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+            data = json.loads(resp.read())
+        _mt5_servers_cache = data.get("mt5", [])
+        _mt5_servers_cache_time = time.time()
+    except Exception:
+        pass  # Return stale cache or empty
+    return _mt5_servers_cache
+
+
+@app.get("/servers/search", summary="Search MT5 trade servers by broker name")
+def search_servers(q: str = ""):
+    """Search the MetaQuotes MT5 server directory (3000+ servers).
+    Returns matching server names with installer URLs from brokers.json when available."""
+    if not q or len(q) < 2:
+        raise HTTPException(status_code=400, detail="Query must be at least 2 characters")
+    servers = _fetch_mt5_servers()
+    q_lower = q.lower()
+    matches = [s for s in servers if q_lower in s.lower()]
+
+    # Build a server->installer_url lookup from brokers.json
+    brokers = load_brokers()
+    server_to_installer: dict[str, str] = {}
+    for cfg in brokers.values():
+        for srv in cfg.get("servers", []):
+            server_to_installer[srv] = cfg.get("installer_url", "")
+
+    results = []
+    for s in matches[:50]:
+        entry = {"server": s, "installer_url": server_to_installer.get(s, "")}
+        results.append(entry)
+
+    return {"query": q, "total": len(matches), "results": results}
 
 
 @app.delete("/accounts/{login}", summary="Remove an account from the registry")
