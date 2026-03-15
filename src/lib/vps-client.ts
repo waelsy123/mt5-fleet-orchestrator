@@ -3,6 +3,7 @@ import type {
   CopierStartRequest,
   TradeRequest,
   VpsAccountInfo,
+  VpsDashboardAccount,
   VpsDashboardData,
   VpsPositions,
 } from "./types";
@@ -54,7 +55,36 @@ export class VpsClient {
   }
 
   async getDashboardData(): Promise<VpsDashboardData> {
-    return this.request<VpsDashboardData>("/dashboard/data");
+    // The VPS API returns { "server/login": { account_id, login, server, info, positions } }
+    // Transform into our normalized format
+    const raw = await this.request<
+      Record<
+        string,
+        {
+          account_id: string;
+          login: string;
+          server: string;
+          info: Record<string, string>;
+          positions: { status: string; positions?: unknown[] };
+        }
+      >
+    >("/dashboard/data");
+
+    const accounts: VpsDashboardAccount[] = Object.values(raw).map((acct) => ({
+      login: acct.login,
+      server: acct.server,
+      broker: "",
+      connected: acct.info?.status === "OK",
+      balance: parseFloat(acct.info?.balance || "0"),
+      equity: parseFloat(acct.info?.equity || "0"),
+      free_margin: parseFloat(acct.info?.free_margin || "0"),
+      profit:
+        parseFloat(acct.info?.equity || "0") -
+        parseFloat(acct.info?.balance || "0"),
+      positions: acct.positions?.positions?.length ?? 0,
+    }));
+
+    return { status: "ok", accounts };
   }
 
   async getAccounts(): Promise<unknown> {

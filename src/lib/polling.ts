@@ -30,7 +30,7 @@ async function pollAll() {
   try {
     vpsList = await prisma.vps.findMany({
       where: {
-        status: { in: ["ONLINE", "OFFLINE"] },
+        status: { in: ["ONLINE", "OFFLINE", "PENDING"] },
       },
       include: { accounts: true },
     });
