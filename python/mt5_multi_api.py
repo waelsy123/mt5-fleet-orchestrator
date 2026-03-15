@@ -463,7 +463,7 @@ def add_account(req: AddAccountRequest):
     os.makedirs(experts_dir, exist_ok=True)
     steps.append(f"Data dir: {data_dir}")
 
-    # ── Step 4: Copy PythonBridge EA and restart ─────────────────────────
+    # ── Step 4: Copy PythonBridge EA and wait for compilation ────────────
     ea_source = Path(__file__).parent / "PythonBridge.mq5"
     if ea_source.exists():
         shutil.copy2(str(ea_source), os.path.join(experts_dir, "PythonBridge.mq5"))
@@ -474,19 +474,40 @@ def add_account(req: AddAccountRequest):
     os.makedirs(data_config, exist_ok=True)
     shutil.copy2(os.path.join(config_dir, "common.ini"), os.path.join(data_config, "common.ini"))
 
-    # Restart terminal so it picks up the EA
+    # Wait for MQL5 compilation to finish (first install compiles ~123 files, takes ~90s)
+    ex5_path = os.path.join(experts_dir, "PythonBridge.ex5")
+    steps.append("Waiting for EA compilation...")
+    for _ in range(24):  # up to 120s
+        if os.path.exists(ex5_path):
+            steps.append("EA compiled successfully")
+            break
+        time.sleep(5)
+    else:
+        steps.append("WARNING: EA compilation timed out (120s)")
+
+    # Restart terminal so it picks up the compiled EA
     subprocess.run(["taskkill", "/f", "/im", "terminal64.exe"],
                    capture_output=True, timeout=10)
     time.sleep(3)
     _start_terminal(terminal_path, ini_path, req.login)
-    steps.append("Terminal restarted with EA")
+    steps.append("Terminal restarted with compiled EA")
 
-    # ── Step 5: Wait for EA ──────────────────────────────────────────────
+    # ── Step 5: Wait for EA to respond ───────────────────────────────────
     time.sleep(15)
     if _wait_for_ea(files_dir, timeout=30):
         steps.append("EA connected")
     else:
-        steps.append("WARNING: EA not responding — check terminal logs")
+        # One more restart — EA may not have attached to chart
+        steps.append("EA not ready — trying final restart")
+        subprocess.run(["taskkill", "/f", "/im", "terminal64.exe"],
+                       capture_output=True, timeout=10)
+        time.sleep(3)
+        _start_terminal(terminal_path, ini_path, req.login)
+        time.sleep(15)
+        if _wait_for_ea(files_dir, timeout=30):
+            steps.append("EA connected after final restart")
+        else:
+            steps.append("WARNING: EA not responding — check terminal logs")
 
     # ── Step 6: Register account with data dir path ──────────────────────
     path = registry_path()
