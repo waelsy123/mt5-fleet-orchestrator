@@ -164,7 +164,9 @@ export default function ProvisionPage({
           >
             {logs || (
               <span className="text-zinc-600">
-                Click &quot;Start Provisioning&quot; to begin...
+                {status === "running"
+                  ? "Waiting for output..."
+                  : 'Click "Start Provisioning" to begin...'}
               </span>
             )}
           </pre>
