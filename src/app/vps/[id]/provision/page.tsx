@@ -4,22 +4,25 @@ import { useRef, useState, useEffect, use } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Play } from "lucide-react";
+import Link from "next/link";
+import { Play, ArrowLeft } from "lucide-react";
 
 type ProvisionStatus = "idle" | "running" | "SUCCESS" | "FAILED";
 
-export default function ProvisionPage({ params }: { params: Promise<{ id: string }> }) {
+export default function ProvisionPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
   const { id } = use(params);
   const [status, setStatus] = useState<ProvisionStatus>("idle");
-  const [lines, setLines] = useState<string[]>([]);
-  const logRef = useRef<HTMLDivElement>(null);
+  const [logs, setLogs] = useState("");
+  const logRef = useRef<HTMLPreElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
+      eventSourceRef.current?.close();
     };
   }, []);
 
@@ -27,57 +30,101 @@ export default function ProvisionPage({ params }: { params: Promise<{ id: string
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
-  }, [lines]);
+  }, [logs]);
+
+  // Check if there's already a running provision
+  useEffect(() => {
+    async function checkExisting() {
+      try {
+        const res = await fetch(`/api/vps/${id}/progress/status`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === "RUNNING") {
+            setStatus("running");
+            setLogs(data.logs || "");
+            connectSSE();
+          } else if (data.status === "SUCCESS" || data.status === "FAILED") {
+            setStatus(data.status);
+            setLogs(data.logs || "");
+          }
+        }
+      } catch {
+        // No existing provision — that's fine
+      }
+    }
+    checkExisting();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  function connectSSE() {
+    const es = new EventSource(`/api/vps/${id}/progress`);
+    eventSourceRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        if (data.logs) {
+          setLogs((prev) => prev + data.logs);
+        }
+
+        if (data.finished) {
+          setStatus(data.status === "SUCCESS" ? "SUCCESS" : "FAILED");
+          es.close();
+        }
+
+        if (data.error) {
+          setLogs((prev) => prev + `\nERROR: ${data.error}\n`);
+          setStatus("FAILED");
+          es.close();
+        }
+      } catch {
+        // Plain text fallback
+        setLogs((prev) => prev + event.data + "\n");
+      }
+    };
+
+    es.onerror = () => {
+      setLogs((prev) => prev + "\nConnection to progress stream lost.\n");
+      setStatus("FAILED");
+      es.close();
+    };
+  }
 
   async function startProvision() {
     setStatus("running");
-    setLines([]);
+    setLogs("");
 
     try {
       const res = await fetch(`/api/vps/${id}/provision`, { method: "POST" });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setLines((prev) => [...prev, `ERROR: ${data.error || "Failed to start provisioning"}`]);
+        setLogs(`ERROR: ${data.error || "Failed to start provisioning"}\n`);
         setStatus("FAILED");
         return;
       }
 
-      setLines((prev) => [...prev, "Provisioning started. Connecting to progress stream..."]);
-
-      const es = new EventSource(`/api/vps/${id}/progress`);
-      eventSourceRef.current = es;
-
-      es.onmessage = (event) => {
-        const data = event.data;
-        if (data === "[DONE]") {
-          setStatus("SUCCESS");
-          es.close();
-          return;
-        }
-        if (data === "[FAILED]") {
-          setStatus("FAILED");
-          es.close();
-          return;
-        }
-        setLines((prev) => [...prev, data]);
-      };
-
-      es.onerror = () => {
-        if (status === "running") {
-          setLines((prev) => [...prev, "Connection to progress stream lost."]);
-          setStatus("FAILED");
-        }
-        es.close();
-      };
+      setLogs("Provisioning started...\n");
+      connectSSE();
     } catch (err: unknown) {
-      setLines((prev) => [...prev, `ERROR: ${err instanceof Error ? err.message : "Unknown error"}`]);
+      setLogs(
+        `ERROR: ${err instanceof Error ? err.message : "Unknown error"}\n`
+      );
       setStatus("FAILED");
     }
   }
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-zinc-100">Provision VPS</h1>
+      <div className="flex items-center gap-4">
+        <Link href={`/vps/${id}`}>
+          <Button variant="ghost" size="sm" className="text-zinc-400">
+            <ArrowLeft className="mr-1 h-4 w-4" />
+            Back
+          </Button>
+        </Link>
+        <h1 className="text-2xl font-bold text-zinc-100">Provision VPS</h1>
+      </div>
 
       <div className="flex items-center gap-4">
         <Button
@@ -89,6 +136,11 @@ export default function ProvisionPage({ params }: { params: Promise<{ id: string
           {status === "running" ? "Provisioning..." : "Start Provisioning"}
         </Button>
 
+        {status === "running" && (
+          <Badge className="bg-blue-500/20 text-blue-500 border-blue-500/30 text-sm px-3 py-1 animate-pulse">
+            RUNNING
+          </Badge>
+        )}
         {status === "SUCCESS" && (
           <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30 text-sm px-3 py-1">
             SUCCESS
@@ -106,20 +158,16 @@ export default function ProvisionPage({ params }: { params: Promise<{ id: string
           <CardTitle className="text-zinc-100">Provisioning Log</CardTitle>
         </CardHeader>
         <CardContent>
-          <div
+          <pre
             ref={logRef}
-            className="max-h-[600px] overflow-auto rounded bg-black p-4 font-mono text-sm text-green-400"
+            className="max-h-[600px] min-h-[200px] overflow-auto rounded bg-black p-4 font-mono text-xs leading-5 text-green-400"
           >
-            {lines.length === 0 ? (
-              <p className="text-zinc-600">Click &quot;Start Provisioning&quot; to begin...</p>
-            ) : (
-              lines.map((line, i) => (
-                <div key={i} className="whitespace-pre-wrap">
-                  {line}
-                </div>
-              ))
+            {logs || (
+              <span className="text-zinc-600">
+                Click &quot;Start Provisioning&quot; to begin...
+              </span>
             )}
-          </div>
+          </pre>
         </CardContent>
       </Card>
     </div>

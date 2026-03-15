@@ -40,7 +40,7 @@ interface VpsDetail {
   id: string;
   name: string;
   ip: string;
-  status: "ONLINE" | "OFFLINE" | "PENDING" | "ERROR";
+  status: "ONLINE" | "OFFLINE" | "PENDING" | "PROVISIONING" | "ERROR";
   vncIp: string;
   vncPort: number;
   accounts: Account[];
@@ -190,14 +190,21 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
             <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
             {syncing ? "Syncing..." : "Sync Accounts"}
           </Button>
-          {(vps.status === "PENDING" || vps.status === "ERROR") && (
-            <Link href={`/vps/${id}/provision`}>
-              <Button className="bg-blue-600 hover:bg-blue-700 text-white">
-                <Play className="mr-2 h-4 w-4" />
-                Provision
-              </Button>
-            </Link>
-          )}
+          <Link href={`/vps/${id}/provision`}>
+            <Button
+              className={
+                vps.status === "PROVISIONING"
+                  ? "bg-yellow-600 hover:bg-yellow-700 text-white animate-pulse"
+                  : vps.status === "PENDING" || vps.status === "ERROR"
+                    ? "bg-blue-600 hover:bg-blue-700 text-white"
+                    : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+              }
+              variant={vps.status === "ONLINE" || vps.status === "OFFLINE" ? "ghost" : "default"}
+            >
+              <Play className="mr-2 h-4 w-4" />
+              {vps.status === "PROVISIONING" ? "View Progress..." : "Provision"}
+            </Button>
+          </Link>
           {!deleteConfirm ? (
             <Button
               variant="ghost"

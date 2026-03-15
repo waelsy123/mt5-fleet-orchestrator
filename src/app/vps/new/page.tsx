@@ -11,6 +11,7 @@ import { toast } from "sonner";
 export default function NewVpsPage() {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
+  const [autoProvision, setAutoProvision] = useState(true);
   const [form, setForm] = useState({
     name: "",
     ip: "",
@@ -44,7 +45,13 @@ export default function NewVpsPage() {
       }
       const data = await res.json();
       toast.success("VPS created successfully");
-      router.push(`/vps/${data.id}`);
+      if (autoProvision) {
+        // Start provisioning and redirect to log page
+        fetch(`/api/vps/${data.id}/provision`, { method: "POST" });
+        router.push(`/vps/${data.id}/provision`);
+      } else {
+        router.push(`/vps/${data.id}`);
+      }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to create VPS");
     } finally {
@@ -126,6 +133,18 @@ export default function NewVpsPage() {
                 className="border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
               />
             </div>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoProvision}
+                onChange={(e) => setAutoProvision(e.target.checked)}
+                className="h-4 w-4 rounded border-zinc-600 bg-zinc-800 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm text-zinc-300">
+                Start provisioning automatically after creation
+              </span>
+            </label>
 
             <div className="flex gap-3 pt-2">
               <Button
