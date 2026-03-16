@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { VpsClient } from "@/lib/vps-client";
+import { copier } from "@/lib/copier";
 
 async function getClient(vpsId: string) {
   const vps = await prisma.vps.findUniqueOrThrow({ where: { id: vpsId } });
@@ -48,6 +49,8 @@ export async function DELETE(
     await prisma.account.delete({
       where: { vpsId_server_login: { vpsId, server, login } },
     });
+
+    copier.onAccountDeleted(vpsId, server, login);
 
     return NextResponse.json(result);
   } catch (err) {

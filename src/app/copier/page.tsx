@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,71 +14,71 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Play, Square } from "lucide-react";
-
-interface VpsOption {
-  id: string;
-  name: string;
-}
+import {
+  Play,
+  Square,
+  ChevronDown,
+  ChevronRight,
+  RotateCcw,
+  Check,
+  AlertTriangle,
+  X,
+} from "lucide-react";
 
 interface AccountOption {
+  vpsId: string;
+  vpsName: string;
   login: string;
   server: string;
 }
 
+interface TargetStatus {
+  key: string;
+  vpsId: string;
+  server: string;
+  login: string;
+  synced: number;
+  failed: number;
+  total: number;
+  lastError: string | null;
+  lastSyncedAt: number | null;
+  log: { time: string; action: string; detail: string }[];
+}
+
 interface CopierStatus {
   running: boolean;
-  sourceLogin: string | null;
-  sourceServer: string | null;
-  targetLogin: string | null;
-  targetServer: string | null;
-  multiplier: number;
-  copiedPositions: number;
-  log: string[];
+  source: { vpsId: string; server: string; login: string } | null;
+  volumeMult: number;
+  sourcePositions: number;
+  targets: TargetStatus[];
+  summary: { synced: number; failed: number; total: number; targetCount: number };
+  log: { time: string; action: string; detail: string }[];
 }
 
 export default function CopierPage() {
-  const [vpsList, setVpsList] = useState<VpsOption[]>([]);
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
-  const [selectedVps, setSelectedVps] = useState("");
   const [sourceAccount, setSourceAccount] = useState("");
-  const [targetAccount, setTargetAccount] = useState("");
+  const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
   const [multiplier, setMultiplier] = useState("1.0");
   const [status, setStatus] = useState<CopierStatus | null>(null);
-  const [loadingVps, setLoadingVps] = useState(true);
-  const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [expandedTarget, setExpandedTarget] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [addingTarget, setAddingTarget] = useState(false);
+  const [removingTarget, setRemovingTarget] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    async function fetchVps() {
-      try {
-        const res = await fetch("/api/vps");
-        if (!res.ok) throw new Error("Failed to fetch VPS list");
-        const json = await res.json();
-        setVpsList(json.map((v: { id: string; name: string }) => ({ id: v.id, name: v.name })));
-      } catch {
-        toast.error("Failed to load VPS list");
-      } finally {
-        setLoadingVps(false);
-      }
-    }
-    fetchVps();
-  }, []);
-
-  useEffect(() => {
-    if (!selectedVps) {
-      setAccounts([]);
-      return;
-    }
     async function fetchAccounts() {
-      setLoadingAccounts(true);
       try {
-        const res = await fetch(`/api/vps/${selectedVps}`);
-        if (!res.ok) throw new Error("Failed to fetch VPS accounts");
+        const res = await fetch("/api/accounts");
+        if (!res.ok) throw new Error("Failed to fetch accounts");
         const json = await res.json();
         setAccounts(
-          (json.accounts || []).map((a: { login: string; server: string }) => ({
+          json.map((a: { vpsId: string; vpsName: string; login: string; server: string }) => ({
+            vpsId: a.vpsId,
+            vpsName: a.vpsName,
             login: a.login,
             server: a.server,
           }))
@@ -86,28 +86,27 @@ export default function CopierPage() {
       } catch {
         toast.error("Failed to load accounts");
       } finally {
-        setLoadingAccounts(false);
+        setLoading(false);
       }
     }
     fetchAccounts();
     fetchStatus();
-  }, [selectedVps]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  async function fetchStatus() {
-    if (!selectedVps) return;
+  const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch(`/api/copier/${selectedVps}/status`);
+      const res = await fetch("/api/copier/status");
       if (res.ok) {
-        const json = await res.json();
-        setStatus(json);
+        setStatus(await res.json());
       }
     } catch {
       // ignore
     }
-  }
+  }, []);
 
   useEffect(() => {
-    if (status?.running && selectedVps) {
+    if (status?.running) {
       pollRef.current = setInterval(fetchStatus, 2000);
     } else {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -115,36 +114,75 @@ export default function CopierPage() {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status?.running, selectedVps]);
+  }, [status?.running, fetchStatus]);
+
+  function accountKey(a: AccountOption) {
+    return `${a.vpsId}|${a.server}|${a.login}`;
+  }
+
+  function accountLabel(a: AccountOption) {
+    return `${a.login} @ ${a.server} (${a.vpsName})`;
+  }
+
+  function parseAccountKey(key: string) {
+    const [vpsId, server, login] = key.split("|");
+    return { vpsId, server, login };
+  }
+
+  const availableTargets = accounts.filter((a) => accountKey(a) !== sourceAccount);
+
+  function toggleTarget(key: string) {
+    setSelectedTargets((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function selectAllTargets() {
+    setSelectedTargets(new Set(availableTargets.map(accountKey)));
+  }
+
+  function deselectAllTargets() {
+    setSelectedTargets(new Set());
+  }
+
+  function findAccountByKey(key: string): AccountOption | undefined {
+    return accounts.find((a) => accountKey(a) === key);
+  }
 
   async function handleStart() {
-    if (!selectedVps || !sourceAccount || !targetAccount) {
-      toast.error("Please select VPS, source, and target accounts");
+    if (!sourceAccount) {
+      toast.error("Please select a source account");
+      return;
+    }
+    if (selectedTargets.size === 0) {
+      toast.error("Please select at least one target account");
       return;
     }
 
-    const [sourceServer, sourceLogin] = sourceAccount.split("|");
-    const [targetServer, targetLogin] = targetAccount.split("|");
+    const source = parseAccountKey(sourceAccount);
+    const targets = Array.from(selectedTargets).map(parseAccountKey);
 
     setSubmitting(true);
     try {
-      const res = await fetch(`/api/copier/${selectedVps}/start`, {
+      const res = await fetch("/api/copier/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sourceLogin,
-          sourceServer,
-          targetLogin,
-          targetServer,
-          multiplier: parseFloat(multiplier),
+          sourceVpsId: source.vpsId,
+          sourceServer: source.server,
+          sourceLogin: source.login,
+          targets,
+          volumeMult: parseFloat(multiplier),
         }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Failed to start copier");
       }
-      toast.success("Copy trading started");
+      toast.success(`Copy trading started: 1 -> ${targets.length} target(s)`);
       fetchStatus();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to start copier");
@@ -154,12 +192,9 @@ export default function CopierPage() {
   }
 
   async function handleStop() {
-    if (!selectedVps) return;
     setSubmitting(true);
     try {
-      const res = await fetch(`/api/copier/${selectedVps}/stop`, {
-        method: "POST",
-      });
+      const res = await fetch("/api/copier/stop", { method: "POST" });
       if (!res.ok) throw new Error("Failed to stop copier");
       toast.success("Copy trading stopped");
       fetchStatus();
@@ -170,15 +205,136 @@ export default function CopierPage() {
     }
   }
 
+  async function handleRetry(targetKey: string) {
+    setRetrying(targetKey);
+    try {
+      const res = await fetch("/api/copier/retry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetKey }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Retry failed");
+      }
+      const data = await res.json();
+      toast.success(`Retried ${data.retried} failed trade(s)`);
+      fetchStatus();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Retry failed");
+    } finally {
+      setRetrying(null);
+    }
+  }
+
+  async function handleAddTarget(key: string) {
+    const { vpsId, server, login } = parseAccountKey(key);
+    setAddingTarget(true);
+    try {
+      const res = await fetch("/api/copier/add-target", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vpsId, server, login }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to add target");
+      }
+      const data = await res.json();
+      toast.success(`Target added — synced ${data.syncedExisting} existing position(s)`);
+      fetchStatus();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to add target");
+    } finally {
+      setAddingTarget(false);
+    }
+  }
+
+  async function handleRemoveTarget(targetKey: string) {
+    setRemovingTarget(targetKey);
+    try {
+      const res = await fetch("/api/copier/remove-target", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetKey }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to remove target");
+      }
+      toast.success("Target removed");
+      fetchStatus();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to remove target");
+    } finally {
+      setRemovingTarget(null);
+    }
+  }
+
+  // Accounts not currently in the copier's target list (for the "add target" dropdown)
+  const activeTargetKeys = new Set(status?.targets.map((t) => t.key) ?? []);
+  const sourceKey = status?.source
+    ? `${status.source.vpsId}|${status.source.server}|${status.source.login}`
+    : sourceAccount;
+  const addableAccounts = accounts.filter(
+    (a) => accountKey(a) !== sourceKey && !activeTargetKeys.has(accountKey(a))
+  );
+
+  function logColor(action: string) {
+    switch (action) {
+      case "START": return "text-blue-400";
+      case "NEW": case "CLOSED": return "text-yellow-400";
+      case "COPIED": case "CLOSED_TARGET": return "text-emerald-400";
+      case "FAIL": case "ERROR": return "text-red-400";
+      case "ADD_TARGET": return "text-blue-400";
+      case "REMOVE_TARGET": return "text-orange-400";
+      case "SNAPSHOT": case "STOP": return "text-zinc-500";
+      default: return "text-green-400";
+    }
+  }
+
+  function targetStatusIcon(t: TargetStatus) {
+    if (t.total === 0) return <span className="text-zinc-500">--</span>;
+    if (t.failed > 0)
+      return <AlertTriangle className="inline h-4 w-4 text-yellow-400" />;
+    return <Check className="inline h-4 w-4 text-emerald-400" />;
+  }
+
+  function targetStatusBadge(t: TargetStatus) {
+    if (t.total === 0)
+      return <Badge className="bg-zinc-700/50 text-zinc-400 border-zinc-600 text-xs">idle</Badge>;
+    if (t.failed > 0)
+      return (
+        <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-xs">
+          {t.synced}/{t.total}
+        </Badge>
+      );
+    return (
+      <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs">
+        {t.synced}/{t.total}
+      </Badge>
+    );
+  }
+
+  function timeSince(ts: number | null) {
+    if (!ts) return "--";
+    const sec = Math.round((Date.now() - ts) / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    return `${Math.round(sec / 60)}m ago`;
+  }
+
+  const isRunning = status?.running === true;
+
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-4xl space-y-6">
       <h1 className="text-2xl font-bold text-zinc-100">Copy Trading</h1>
 
+      {/* Configuration */}
       <Card className="border-zinc-700 bg-zinc-900">
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-zinc-100">Configuration</CardTitle>
-            {status?.running && (
+            {isRunning && (
               <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30">
                 Running
               </Badge>
@@ -186,159 +342,342 @@ export default function CopierPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label className="text-zinc-300">VPS</Label>
-            {loadingVps ? (
-              <p className="text-sm text-zinc-500">Loading VPS list...</p>
-            ) : (
-              <Select value={selectedVps} onValueChange={(v) => setSelectedVps(v ?? "")}>
-                <SelectTrigger className="border-zinc-700 bg-zinc-800 text-zinc-100">
-                  <SelectValue placeholder="Select a VPS" />
-                </SelectTrigger>
-                <SelectContent className="border-zinc-700 bg-zinc-800">
-                  {vpsList.map((v) => (
-                    <SelectItem
-                      key={v.id}
-                      value={v.id}
-                      className="text-zinc-100 focus:bg-zinc-700 focus:text-zinc-100"
-                    >
-                      {v.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-
-          {selectedVps && (
+          {loading ? (
+            <p className="text-sm text-zinc-500">Loading accounts...</p>
+          ) : accounts.length === 0 ? (
+            <p className="text-sm text-zinc-500">
+              No accounts found. Add accounts to your VPS instances first.
+            </p>
+          ) : (
             <>
               <div className="space-y-2">
-                <Label className="text-zinc-300">Source Account</Label>
-                {loadingAccounts ? (
-                  <p className="text-sm text-zinc-500">Loading accounts...</p>
-                ) : (
-                  <Select value={sourceAccount} onValueChange={(v) => setSourceAccount(v ?? "")}>
-                    <SelectTrigger className="border-zinc-700 bg-zinc-800 text-zinc-100">
-                      <SelectValue placeholder="Select source account" />
-                    </SelectTrigger>
-                    <SelectContent className="border-zinc-700 bg-zinc-800">
-                      {accounts.map((a) => (
-                        <SelectItem
-                          key={`source-${a.server}-${a.login}`}
-                          value={`${a.server}|${a.login}`}
-                          className="text-zinc-100 focus:bg-zinc-700 focus:text-zinc-100"
-                        >
-                          {a.login} @ {a.server}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Target Account</Label>
-                {loadingAccounts ? (
-                  <p className="text-sm text-zinc-500">Loading accounts...</p>
-                ) : (
-                  <Select value={targetAccount} onValueChange={(v) => setTargetAccount(v ?? "")}>
-                    <SelectTrigger className="border-zinc-700 bg-zinc-800 text-zinc-100">
-                      <SelectValue placeholder="Select target account" />
-                    </SelectTrigger>
-                    <SelectContent className="border-zinc-700 bg-zinc-800">
-                      {accounts.map((a) => (
-                        <SelectItem
-                          key={`target-${a.server}-${a.login}`}
-                          value={`${a.server}|${a.login}`}
-                          className="text-zinc-100 focus:bg-zinc-700 focus:text-zinc-100"
-                        >
-                          {a.login} @ {a.server}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Volume Multiplier</Label>
-                <Input
-                  type="number"
-                  step="0.1"
-                  min="0.1"
-                  value={multiplier}
-                  onChange={(e) => setMultiplier(e.target.value)}
-                  className="border-zinc-700 bg-zinc-800 text-zinc-100"
-                />
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <Button
-                  onClick={handleStart}
-                  disabled={submitting || status?.running === true}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                <Label className="text-zinc-300">Source Account (master)</Label>
+                <Select
+                  value={sourceAccount}
+                  onValueChange={(v) => {
+                    const val = v ?? "";
+                    setSourceAccount(val);
+                    if (val) {
+                      setSelectedTargets((prev) => {
+                        const next = new Set(prev);
+                        next.delete(val);
+                        return next;
+                      });
+                    }
+                  }}
+                  disabled={isRunning}
                 >
-                  <Play className="mr-2 h-4 w-4" />
-                  {submitting ? "Starting..." : "Start"}
-                </Button>
-                <Button
-                  onClick={handleStop}
-                  disabled={submitting || !status?.running}
-                  variant="ghost"
-                  className="text-red-500 hover:text-red-400 hover:bg-red-500/10"
-                >
-                  <Square className="mr-2 h-4 w-4" />
-                  Stop
-                </Button>
+                  <SelectTrigger className="border-zinc-700 bg-zinc-800 text-zinc-100">
+                    <SelectValue placeholder="Select source account" />
+                  </SelectTrigger>
+                  <SelectContent className="border-zinc-700 bg-zinc-800">
+                    {accounts.map((a) => (
+                      <SelectItem
+                        key={`source-${accountKey(a)}`}
+                        value={accountKey(a)}
+                        className="text-zinc-100 focus:bg-zinc-700 focus:text-zinc-100"
+                      >
+                        {accountLabel(a)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
+
+              {sourceAccount && (
+                <>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-zinc-300">
+                        Target Accounts ({selectedTargets.size}/{availableTargets.length})
+                      </Label>
+                      {!isRunning && (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={selectAllTargets}
+                            className="text-xs text-blue-400 hover:text-blue-300"
+                          >
+                            Select all
+                          </button>
+                          <span className="text-xs text-zinc-600">|</span>
+                          <button
+                            onClick={deselectAllTargets}
+                            className="text-xs text-zinc-400 hover:text-zinc-300"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="max-h-[240px] overflow-auto rounded border border-zinc-700 bg-zinc-800">
+                      {availableTargets.map((a) => {
+                        const key = accountKey(a);
+                        const checked = selectedTargets.has(key);
+                        return (
+                          <label
+                            key={key}
+                            className={`flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-zinc-700/50 ${
+                              checked ? "bg-zinc-700/30" : ""
+                            } ${isRunning ? "pointer-events-none opacity-60" : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleTarget(key)}
+                              disabled={isRunning}
+                              className="accent-emerald-500"
+                            />
+                            <span className="text-sm text-zinc-200">{accountLabel(a)}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-zinc-300">Volume Multiplier</Label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      min="0.1"
+                      value={multiplier}
+                      onChange={(e) => setMultiplier(e.target.value)}
+                      className="border-zinc-700 bg-zinc-800 text-zinc-100"
+                      disabled={isRunning}
+                    />
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <Button
+                      onClick={handleStart}
+                      disabled={submitting || isRunning || selectedTargets.size === 0}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                    >
+                      <Play className="mr-2 h-4 w-4" />
+                      {submitting ? "Starting..." : `Start (1 -> ${selectedTargets.size})`}
+                    </Button>
+                    <Button
+                      onClick={handleStop}
+                      disabled={submitting || !isRunning}
+                      variant="ghost"
+                      className="text-red-500 hover:text-red-400 hover:bg-red-500/10"
+                    >
+                      <Square className="mr-2 h-4 w-4" />
+                      Stop
+                    </Button>
+                  </div>
+                </>
+              )}
             </>
           )}
         </CardContent>
       </Card>
 
-      {status && (
-        <Card className="border-zinc-700 bg-zinc-900">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-zinc-100">Status</CardTitle>
-              {status.running && (
-                <span className="text-sm text-zinc-400">
-                  Copied positions: {status.copiedPositions}
-                </span>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent>
-            {status.sourceLogin && (
-              <div className="mb-4 grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <p className="text-zinc-500">Source</p>
-                  <p className="font-mono text-zinc-200">
-                    {status.sourceLogin} @ {status.sourceServer}
-                  </p>
+      {/* Status — only show when running or has data */}
+      {status && (status.running || status.targets.length > 0) && (
+        <>
+          {/* Summary bar */}
+          <Card className="border-zinc-700 bg-zinc-900">
+            <CardContent className="py-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="text-sm text-zinc-400">
+                    Source: <span className="font-mono text-zinc-200">{status.source?.login}@{status.source?.server}</span>
+                  </div>
+                  <span className="text-zinc-600">|</span>
+                  <div className="text-sm text-zinc-400">
+                    Positions: <span className="text-zinc-200">{status.sourcePositions}</span>
+                  </div>
+                  <span className="text-zinc-600">|</span>
+                  <div className="text-sm text-zinc-400">
+                    x<span className="text-zinc-200">{status.volumeMult}</span>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-zinc-500">Target</p>
-                  <p className="font-mono text-zinc-200">
-                    {status.targetLogin} @ {status.targetServer}
-                  </p>
+                <div className="flex items-center gap-2">
+                  {status.summary.failed > 0 ? (
+                    <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
+                      {status.summary.synced}/{status.summary.total} synced ({status.summary.failed} failed)
+                    </Badge>
+                  ) : status.summary.total > 0 ? (
+                    <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+                      {status.summary.synced}/{status.summary.total} synced
+                    </Badge>
+                  ) : (
+                    <Badge className="bg-zinc-700/50 text-zinc-400 border-zinc-600">
+                      {status.summary.targetCount} target(s) — waiting for trades
+                    </Badge>
+                  )}
                 </div>
               </div>
-            )}
+            </CardContent>
+          </Card>
 
-            <div className="max-h-[400px] overflow-auto rounded bg-black p-4 font-mono text-sm text-green-400">
-              {status.log && status.log.length > 0 ? (
-                status.log.map((line, i) => (
-                  <div key={i} className="whitespace-pre-wrap">
-                    {line}
+          {/* Target status table */}
+          <Card className="border-zinc-700 bg-zinc-900">
+            <CardHeader>
+              <CardTitle className="text-zinc-100">Targets</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="overflow-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-zinc-700 text-left text-zinc-400">
+                      <th className="px-4 py-2 font-medium"></th>
+                      <th className="px-4 py-2 font-medium">Account</th>
+                      <th className="px-4 py-2 font-medium">Status</th>
+                      <th className="px-4 py-2 font-medium">Synced</th>
+                      <th className="px-4 py-2 font-medium">Last Sync</th>
+                      <th className="px-4 py-2 font-medium">Last Error</th>
+                      <th className="px-4 py-2 font-medium"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.targets.map((t) => {
+                      const acct = findAccountByKey(t.key);
+                      const vpsName = acct?.vpsName ?? "";
+                      const isExpanded = expandedTarget === t.key;
+                      return (
+                        <>
+                          <tr
+                            key={t.key}
+                            className="border-b border-zinc-800 hover:bg-zinc-800/50 cursor-pointer"
+                            onClick={() => setExpandedTarget(isExpanded ? null : t.key)}
+                          >
+                            <td className="px-4 py-2 text-zinc-500">
+                              {isExpanded ? (
+                                <ChevronDown className="h-4 w-4" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4" />
+                              )}
+                            </td>
+                            <td className="px-4 py-2">
+                              <span className="font-mono text-zinc-200">
+                                {t.login}@{t.server}
+                              </span>
+                              {vpsName && (
+                                <span className="ml-2 text-xs text-zinc-500">({vpsName})</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-2">{targetStatusIcon(t)}</td>
+                            <td className="px-4 py-2">{targetStatusBadge(t)}</td>
+                            <td className="px-4 py-2 text-zinc-400">{timeSince(t.lastSyncedAt)}</td>
+                            <td className="max-w-[200px] truncate px-4 py-2 text-xs text-red-400">
+                              {t.lastError ?? ""}
+                            </td>
+                            <td className="px-4 py-2">
+                              <div className="flex items-center gap-1">
+                                {t.failed > 0 && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 text-xs text-yellow-400 hover:text-yellow-300 hover:bg-yellow-500/10"
+                                    disabled={retrying === t.key}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRetry(t.key);
+                                    }}
+                                  >
+                                    <RotateCcw className="mr-1 h-3 w-3" />
+                                    {retrying === t.key ? "..." : "Retry"}
+                                  </Button>
+                                )}
+                                {isRunning && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                                    disabled={removingTarget === t.key}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRemoveTarget(t.key);
+                                    }}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </Button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr key={`${t.key}-log`}>
+                              <td colSpan={7} className="bg-black/50 px-4 py-2">
+                                <div className="max-h-[200px] overflow-auto rounded bg-black p-3 font-mono text-xs">
+                                  {t.log.length > 0 ? (
+                                    t.log.map((entry, i) => (
+                                      <div key={i} className="whitespace-pre-wrap">
+                                        <span className="text-zinc-600">{entry.time}</span>{" "}
+                                        <span className={logColor(entry.action)}>
+                                          [{entry.action}]
+                                        </span>{" "}
+                                        <span className="text-zinc-300">{entry.detail}</span>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <span className="text-zinc-600">No activity yet.</span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {/* Add target while running */}
+              {isRunning && addableAccounts.length > 0 && (
+                <div className="border-t border-zinc-700 px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <Select
+                      onValueChange={(v) => {
+                        if (typeof v === "string" && v) handleAddTarget(v);
+                      }}
+                      disabled={addingTarget}
+                    >
+                      <SelectTrigger className="h-8 w-[320px] border-zinc-700 bg-zinc-800 text-zinc-100 text-xs">
+                        <SelectValue placeholder={addingTarget ? "Adding..." : "Add target account..."} />
+                      </SelectTrigger>
+                      <SelectContent className="border-zinc-700 bg-zinc-800">
+                        {addableAccounts.map((a) => (
+                          <SelectItem
+                            key={accountKey(a)}
+                            value={accountKey(a)}
+                            className="text-zinc-100 text-xs focus:bg-zinc-700 focus:text-zinc-100"
+                          >
+                            {accountLabel(a)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-                ))
-              ) : (
-                <p className="text-zinc-600">No log entries yet.</p>
+                </div>
               )}
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+
+          {/* Global activity log */}
+          <Card className="border-zinc-700 bg-zinc-900">
+            <CardHeader>
+              <CardTitle className="text-zinc-100">Activity Log</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="max-h-[300px] overflow-auto rounded bg-black p-4 font-mono text-sm">
+                {status.log && status.log.length > 0 ? (
+                  status.log.map((entry, i) => (
+                    <div key={i} className="whitespace-pre-wrap">
+                      <span className="text-zinc-600">{entry.time}</span>{" "}
+                      <span className={logColor(entry.action)}>[{entry.action}]</span>{" "}
+                      <span className="text-zinc-300">{entry.detail}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-zinc-600">No log entries yet.</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </>
       )}
     </div>
   );
