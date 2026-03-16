@@ -84,3 +84,14 @@ enum ProvisionStatus {
   SUCCESS
   FAILED
 }
+
+model CopierSession {
+  id             String   @id @default("singleton")
+  running        Boolean  @default(false)
+  sourceVpsId    String
+  sourceServer   String
+  sourceLogin    String
+  volumeMult     Float    @default(1.0)
+  targets        Json     @default("[]")
+  updatedAt      DateTime @updatedAt
+}
