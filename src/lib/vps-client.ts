@@ -65,6 +65,7 @@ export class VpsClient {
           account_id: string;
           login: string;
           server: string;
+          connected?: boolean;
           info: Record<string, string>;
           positions: { status: string; positions?: unknown[] };
         }
@@ -75,7 +76,7 @@ export class VpsClient {
       login: acct.login,
       server: acct.server,
       broker: "",
-      connected: acct.info?.status === "OK",
+      connected: acct.connected ?? (acct.info?.status === "OK" || acct.positions?.status === "OK"),
       balance: parseFloat(acct.info?.balance || "0"),
       equity: parseFloat(acct.info?.equity || "0"),
       free_margin: parseFloat(acct.info?.free_margin || "0"),
