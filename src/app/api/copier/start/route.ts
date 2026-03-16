@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { copier } from "@/lib/copier";
+import { copierManager } from "@/lib/copier";
 import type { TargetAccount } from "@/lib/copier";
 
 export async function POST(request: NextRequest) {
@@ -26,8 +26,14 @@ export async function POST(request: NextRequest) {
       where: { vpsId: sourceVpsId, server: sourceServer, login: sourceLogin },
     });
 
-    // Reject if source is currently a slave in the running copier
-    if (copier.isActiveTarget(sourceVpsId, sourceServer, sourceLogin)) {
+    // Reject if source is already used in any session (as source or target)
+    if (copierManager.isActiveSource(sourceVpsId, sourceServer, sourceLogin)) {
+      return NextResponse.json(
+        { error: `${sourceLogin}@${sourceServer} is already a source in another session` },
+        { status: 400 }
+      );
+    }
+    if (copierManager.isActiveTarget(sourceVpsId, sourceServer, sourceLogin)) {
       return NextResponse.json(
         { error: `${sourceLogin}@${sourceServer} is currently a copy target — a slave cannot also be a master` },
         { status: 400 }
@@ -43,9 +49,9 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      if (copier.isActiveSource(t.vpsId, t.server, t.login)) {
+      if (copierManager.isInAnySession(t.vpsId, t.server, t.login)) {
         return NextResponse.json(
-          { error: `${t.login}@${t.server} is currently the copy source — a master cannot also be a slave` },
+          { error: `${t.login}@${t.server} is already in another copier session` },
           { status: 400 }
         );
       }
@@ -53,7 +59,6 @@ export async function POST(request: NextRequest) {
         where: { vpsId: t.vpsId, server: t.server, login: t.login },
       });
 
-      // Use explicit volumeMult if provided, otherwise auto-calculate from balance ratio
       const volumeMult = t.volumeMult ??
         (sourceAccount.balance > 0 ? Math.round((targetAccount.balance / sourceAccount.balance) * 100) / 100 : 1.0);
 
@@ -66,14 +71,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    await copier.start({
+    const result = await copierManager.startSession({
       sourceVpsId,
       sourceServer,
       sourceLogin,
       targets: resolvedTargets,
     });
 
-    return NextResponse.json({ status: "OK", message: `Copier started: 1 source -> ${targets.length} target(s)` });
+    return NextResponse.json({ status: "OK", sessionId: result.sessionId, message: `Session started: 1 source -> ${resolvedTargets.length} target(s)` });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

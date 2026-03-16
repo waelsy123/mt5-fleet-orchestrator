@@ -86,7 +86,7 @@ enum ProvisionStatus {
 }
 
 model CopierSession {
-  id             String   @id @default("singleton")
+  id             String   @id
   running        Boolean  @default(false)
   sourceVpsId    String
   sourceServer   String
