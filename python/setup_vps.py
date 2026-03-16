@@ -17,6 +17,8 @@ FILES_TO_COPY = {
     "PythonBridge.mq5": "C:/MT5/PythonBridge.mq5",
     "brokers.json": "C:/MT5/brokers.json",
     "static/index.html": "C:/MT5/static/index.html",
+    "mt5_config/servers.dat": "C:/MT5/mt5_config/servers.dat",
+    "mt5_config/accounts.dat": "C:/MT5/mt5_config/accounts.dat",
 }
 PYTHON_URL = "https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe"
 PYTHON_EXE = r"C:\Program Files\Python312\python.exe"
@@ -436,6 +438,18 @@ def phase2_deploy(vps_ip, password):
             else:
                 raise
 
+    # Step 0: Fix DNS (Contabo VPS often has broken IPv6-only DNS)
+    print("\n[0/6] Fixing DNS...")
+    ssh_run(client, 'netsh interface ipv6 set dnsservers "Ethernet" static none 2>nul')
+    ssh_run(client, 'netsh interface ipv4 set dnsservers "Ethernet" static 8.8.8.8 primary')
+    ssh_run(client, 'netsh interface ipv4 add dnsservers "Ethernet" 8.8.4.4 index=2')
+    ssh_run(client, 'ipconfig /flushdns')
+    out, _ = ssh_run(client, 'nslookup google.com 8.8.8.8')
+    if 'google.com' in out.lower():
+        print("  DNS configured (8.8.8.8)")
+    else:
+        print(f"  WARNING: DNS may not be working: {out[:100]}")
+
     # Step 1: Install Python
     print("\n[1/6] Installing Python...")
     out, _ = ssh_run(client, f'"{PYTHON_EXE}" --version')
@@ -464,8 +478,9 @@ def phase2_deploy(vps_ip, password):
 
     # Step 3: Create directories
     print("\n[3/6] Creating directories...")
-    ssh_run(client, r'cmd /c "mkdir C:\MT5\static 2>nul"')
+    ssh_run(client, r'cmd /c "mkdir C:\MT5\static 2>nul & mkdir C:\MT5\mt5_config 2>nul"')
     print("  C:\\MT5\\static ready")
+    print("  C:\\MT5\\mt5_config ready")
 
     # Step 4: Copy files via SFTP (including generated start_api.ps1)
     print("\n[4/6] Copying project files...")
