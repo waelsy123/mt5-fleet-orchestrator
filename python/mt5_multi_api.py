@@ -193,10 +193,13 @@ def dashboard_data():
     for key, acc in accounts.items():
         info = send_command(acc["files_dir"], f"INFO|EURUSD")
         positions = send_command(acc["files_dir"], "POSITIONS")
+        # INFO action has a bug in some builds — use POSITIONS to determine connectivity
+        connected = (info.get("status") == "OK" or positions.get("status") == "OK")
         result[key] = {
             "account_id": acc["account_id"],
             "login": acc["login"],
             "server": acc["server"],
+            "connected": connected,
             "info": info,
             "positions": positions,
         }
