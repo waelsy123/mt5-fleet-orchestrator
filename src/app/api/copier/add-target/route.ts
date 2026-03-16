@@ -15,6 +15,14 @@ export async function POST(request: NextRequest) {
       where: { vpsId, server, login },
     });
 
+    // Reject if this account is currently the source
+    if (copier.isActiveSource(vpsId, server, login)) {
+      return NextResponse.json(
+        { error: `${login}@${server} is the copy source — a master cannot also be a slave` },
+        { status: 400 }
+      );
+    }
+
     const result = await copier.addTarget({ vpsId, server, login, mode: mode ?? "opposite" });
     if ("error" in result) {
       return NextResponse.json({ error: result.error }, { status: 400 });

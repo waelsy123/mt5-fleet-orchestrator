@@ -95,6 +95,23 @@ class OppositeCopier {
     return client;
   }
 
+  // Check if an account is currently a target in the running copier
+  isActiveTarget(vpsId: string, server: string, login: string): boolean {
+    if (!this.running) return false;
+    const key = `${vpsId}|${server}|${login}`;
+    return this.targetStates.has(key);
+  }
+
+  // Check if an account is currently the source in the running copier
+  isActiveSource(vpsId: string, server: string, login: string): boolean {
+    if (!this.running || !this.config) return false;
+    return (
+      this.config.sourceVpsId === vpsId &&
+      this.config.sourceServer === server &&
+      this.config.sourceLogin === login
+    );
+  }
+
   async start(config: CopierConfig) {
     if (this.running) {
       this.stop();

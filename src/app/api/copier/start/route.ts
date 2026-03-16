@@ -27,11 +27,26 @@ export async function POST(request: NextRequest) {
       where: { vpsId: sourceVpsId, server: sourceServer, login: sourceLogin },
     });
 
-    // Validate targets exist and none is the source
+    // Reject if source is currently a slave in the running copier
+    if (copier.isActiveTarget(sourceVpsId, sourceServer, sourceLogin)) {
+      return NextResponse.json(
+        { error: `${sourceLogin}@${sourceServer} is currently a copy target — a slave cannot also be a master` },
+        { status: 400 }
+      );
+    }
+
+    // Validate targets exist, none is the source, and none is the current source of another copier session
     for (const t of targets) {
       if (t.vpsId === sourceVpsId && t.server === sourceServer && t.login === sourceLogin) {
         return NextResponse.json(
           { error: `Target ${t.login}@${t.server} is the same as source` },
+          { status: 400 }
+        );
+      }
+      // Reject if target is currently a source (master) in the running copier
+      if (copier.isActiveSource(t.vpsId, t.server, t.login)) {
+        return NextResponse.json(
+          { error: `${t.login}@${t.server} is currently the copy source — a master cannot also be a slave` },
           { status: 400 }
         );
       }
