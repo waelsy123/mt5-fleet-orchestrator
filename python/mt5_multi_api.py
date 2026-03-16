@@ -266,14 +266,20 @@ def _install_terminal(installer_path: str) -> str | None:
     return _find_installed_terminal()
 
 
-def _copy_terminal_for_account(source_terminal: str, login: str) -> str:
-    """Copy terminal installation to per-account directory C:\\MT5\\{login}\\.
+def _account_dir_name(server: str, login: str) -> str:
+    """Generate directory name for an account: {server}_{login}."""
+    safe_server = re.sub(r'[^\w\-]', '_', server)
+    return f"{safe_server}_{login}"
+
+
+def _copy_terminal_for_account(source_terminal: str, server: str, login: str) -> str:
+    """Copy terminal installation to per-account directory C:\\MT5\\{server}_{login}\\.
 
     Each account gets its own terminal64.exe copy. Running from a unique path
     makes MT5 create a unique AppData hash dir, isolating accounts.
     Does NOT use /portable — portable mode is broken on build 5687+.
     """
-    account_dir = os.path.join(BASE_DIR, login)
+    account_dir = os.path.join(BASE_DIR, _account_dir_name(server, login))
     account_terminal = os.path.join(account_dir, "terminal64.exe")
     if os.path.exists(account_terminal):
         return account_terminal
@@ -332,13 +338,13 @@ def _get_new_data_dir(known_dirs: set) -> str | None:
     return best
 
 
-def _stop_terminal_for_account(login: str):
+def _stop_terminal_for_account(dir_name: str):
     """Stop only the terminal for this account (by matching command line)."""
     try:
-        result = subprocess.run(
+        subprocess.run(
             ["powershell", "-Command",
              f'Get-WmiObject Win32_Process -Filter "name=\'terminal64.exe\'" | '
-             f'Where-Object {{ $_.CommandLine -match "{login}" }} | '
+             f'Where-Object {{ $_.CommandLine -match "{dir_name}" }} | '
              f'ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}'],
             capture_output=True, timeout=15,
         )
@@ -346,14 +352,14 @@ def _stop_terminal_for_account(login: str):
         pass
 
 
-def _start_terminal(terminal_path: str, ini_path: str, login: str):
+def _start_terminal(terminal_path: str, ini_path: str, dir_name: str):
     """Create scheduled task and start the terminal (non-portable mode).
 
     Uses a .bat launcher to avoid quoting issues with schtasks.
     Does NOT use /portable — portable mode has a connection bug on build 5687+.
     """
-    task_name = f"StartMT5_{login}"
-    bat_path = os.path.join(BASE_DIR, f"launch_{login}.bat")
+    task_name = f"StartMT5_{dir_name}"
+    bat_path = os.path.join(BASE_DIR, f"launch_{dir_name}.bat")
 
     with open(bat_path, "w") as f:
         f.write(f'"{terminal_path}" /config:"{ini_path}"\r\n')
@@ -415,7 +421,8 @@ def add_account(req: AddAccountRequest):
     if not req.server:
         raise HTTPException(status_code=400, detail="server is required (or provide broker name)")
 
-    account_dir = os.path.join(BASE_DIR, req.login)
+    dir_name = _account_dir_name(req.server, req.login)
+    account_dir = os.path.join(BASE_DIR, dir_name)
     config_dir = os.path.join(account_dir, "config")
     ini_path = os.path.join(account_dir, "startup.ini")
     steps = []
@@ -453,7 +460,7 @@ def add_account(req: AddAccountRequest):
         steps.append(f"Base terminal: {source_terminal}")
 
     # ── Step 2: Copy terminal to per-account dir ─────────────────────────
-    terminal_path = _copy_terminal_for_account(source_terminal, req.login)
+    terminal_path = _copy_terminal_for_account(source_terminal, req.server, req.login)
     steps.append(f"Account terminal: {terminal_path}")
 
     # ── Step 3: Write configs ────────────────────────────────────────────
@@ -497,10 +504,10 @@ def add_account(req: AddAccountRequest):
 
     # ── Step 4: First launch — creates unique AppData data dir ───────────
     known_dirs = _get_known_data_dirs()
-    _stop_terminal_for_account(req.login)
+    _stop_terminal_for_account(dir_name)
     time.sleep(2)
 
-    _start_terminal(terminal_path, ini_path, req.login)
+    _start_terminal(terminal_path, ini_path, dir_name)
     steps.append("Terminal started (first run — creating data dir, compiling EA)")
 
     # Wait for a NEW AppData data dir to appear (not one already registered)
@@ -549,9 +556,9 @@ def add_account(req: AddAccountRequest):
         steps.append("WARNING: EA compilation timed out (120s)")
 
     # Restart this account's terminal so it picks up the compiled EA
-    _stop_terminal_for_account(req.login)
+    _stop_terminal_for_account(dir_name)
     time.sleep(3)
-    _start_terminal(terminal_path, ini_path, req.login)
+    _start_terminal(terminal_path, ini_path, dir_name)
     steps.append("Terminal restarted with compiled EA")
 
     # ── Step 6: Wait for EA to respond ───────────────────────────────────
@@ -561,9 +568,9 @@ def add_account(req: AddAccountRequest):
     else:
         # Final restart attempt
         steps.append("EA not ready — trying final restart")
-        _stop_terminal_for_account(req.login)
+        _stop_terminal_for_account(dir_name)
         time.sleep(3)
-        _start_terminal(terminal_path, ini_path, req.login)
+        _start_terminal(terminal_path, ini_path, dir_name)
         time.sleep(15)
         if _wait_for_ea(files_dir, timeout=30):
             steps.append("EA connected after final restart")
