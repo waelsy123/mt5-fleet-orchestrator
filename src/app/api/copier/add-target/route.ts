@@ -4,7 +4,7 @@ import { copier } from "@/lib/copier";
 
 export async function POST(request: NextRequest) {
   try {
-    const { vpsId, server, login } = await request.json();
+    const { vpsId, server, login, mode } = await request.json();
 
     if (!vpsId || !server || !login) {
       return NextResponse.json({ error: "vpsId, server, and login are required" }, { status: 400 });
@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
       where: { vpsId, server, login },
     });
 
-    const result = await copier.addTarget({ vpsId, server, login });
+    const result = await copier.addTarget({ vpsId, server, login, mode: mode ?? "opposite" });
     if ("error" in result) {
       return NextResponse.json({ error: result.error }, { status: 400 });
     }

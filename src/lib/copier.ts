@@ -20,14 +20,18 @@ interface MirrorState {
   error?: string;
 }
 
+export type CopyMode = "follow" | "opposite";
+
 export interface TargetAccount {
   vpsId: string;
   server: string;
   login: string;
+  mode: CopyMode;
 }
 
 interface TargetState {
   account: TargetAccount;
+  mode: CopyMode;
   // source ticket -> mirror state
   mirrors: Record<string, MirrorState>;
   lastError: string | null;
@@ -104,18 +108,20 @@ class OppositeCopier {
     this.running = true;
 
     const srcLabel = `${config.sourceLogin}@${config.sourceServer}`;
-    this.addGlobalLog("START", `Source: ${srcLabel} -> ${config.targets.length} target(s) (x${config.volumeMult}, opposite)`);
+    this.addGlobalLog("START", `Source: ${srcLabel} -> ${config.targets.length} target(s) (x${config.volumeMult})`);
 
     for (const t of config.targets) {
       const key = targetKey(t);
+      const mode = t.mode ?? "opposite";
       this.targetStates.set(key, {
         account: t,
+        mode,
         mirrors: {},
         lastError: null,
         lastSyncedAt: null,
         log: [],
       });
-      this.addTargetLog(key, "START", `Target initialized: ${t.login}@${t.server}`);
+      this.addTargetLog(key, "START", `Target initialized: ${t.login}@${t.server} [${mode}]`);
     }
 
     await this.snapshotExisting();
@@ -208,12 +214,11 @@ class OppositeCopier {
 
     // Fan out new positions to all targets in parallel
     for (const [ticket, pos] of newTickets) {
-      const oppType = pos.type === "BUY" ? "SELL" : "BUY";
       const volume = Math.round(parseFloat(pos.volume) * this.config.volumeMult * 100) / 100;
-      this.addGlobalLog("NEW", `Source: ${pos.type} ${pos.volume} ${pos.symbol} (#${ticket}) -> ${oppType} ${volume} to ${this.targetStates.size} target(s)`);
+      this.addGlobalLog("NEW", `Source: ${pos.type} ${pos.volume} ${pos.symbol} (#${ticket}) -> ${volume} to ${this.targetStates.size} target(s)`);
 
       const promises = Array.from(this.targetStates.entries()).map(([key, ts]) =>
-        this.copyToTarget(key, ts, ticket, pos, oppType, volume)
+        this.copyToTarget(key, ts, ticket, pos, volume)
       );
       await Promise.allSettled(promises);
     }
@@ -229,18 +234,23 @@ class OppositeCopier {
     }
   }
 
+  private resolveTradeType(srcType: string, mode: CopyMode): string {
+    if (mode === "follow") return srcType;
+    return srcType === "BUY" ? "SELL" : "BUY";
+  }
+
   private async copyToTarget(
     key: string,
     ts: TargetState,
     ticket: string,
     pos: TrackedPosition,
-    oppType: string,
     volume: number
   ) {
+    const tradeType = this.resolveTradeType(pos.type, ts.mode);
     try {
       const client = await this.getClient(ts.account.vpsId);
       const trade = { symbol: pos.symbol, volume, comment: `copy_${ticket}` };
-      const result = oppType === "BUY"
+      const result = tradeType === "BUY"
         ? await client.buy(ts.account.server, ts.account.login, trade)
         : await client.sell(ts.account.server, ts.account.login, trade);
 
@@ -249,12 +259,12 @@ class OppositeCopier {
         ts.mirrors[ticket] = { status: "synced" };
         ts.lastSyncedAt = Date.now();
         ts.lastError = null;
-        this.addTargetLog(key, "COPIED", `${oppType} ${volume} ${pos.symbol} @ ${r.price ?? "?"} — Deal #${r.deal ?? "?"}`);
+        this.addTargetLog(key, "COPIED", `${tradeType} ${volume} ${pos.symbol} @ ${r.price ?? "?"} — Deal #${r.deal ?? "?"} [${ts.mode}]`);
       } else {
         const err = r?.message ?? r?.raw ?? JSON.stringify(result);
         ts.mirrors[ticket] = { status: "failed", error: err };
         ts.lastError = err;
-        this.addTargetLog(key, "FAIL", `${oppType} ${volume} ${pos.symbol}: ${err}`);
+        this.addTargetLog(key, "FAIL", `${tradeType} ${volume} ${pos.symbol}: ${err}`);
       }
     } catch (e) {
       const err = String(e);
@@ -313,8 +323,10 @@ class OppositeCopier {
       return { error: "Account is already a target" };
     }
 
+    const mode = target.mode ?? "opposite";
     const ts: TargetState = {
       account: target,
+      mode,
       mirrors: {},
       lastError: null,
       lastSyncedAt: null,
@@ -322,14 +334,13 @@ class OppositeCopier {
     };
     this.targetStates.set(key, ts);
     this.config.targets.push(target);
-    this.addTargetLog(key, "START", `Target added while running: ${target.login}@${target.server}`);
-    this.addGlobalLog("ADD_TARGET", `Added target: ${target.login}@${target.server} (now ${this.targetStates.size} target(s))`);
+    this.addTargetLog(key, "START", `Target added while running: ${target.login}@${target.server} [${mode}]`);
+    this.addGlobalLog("ADD_TARGET", `Added target: ${target.login}@${target.server} [${mode}] (now ${this.targetStates.size} target(s))`);
 
     // Sync: copy all current source positions to the new target
     for (const [ticket, pos] of Object.entries(this.sourcePositions)) {
-      const oppType = pos.type === "BUY" ? "SELL" : "BUY";
       const volume = Math.round(parseFloat(pos.volume) * this.config.volumeMult * 100) / 100;
-      await this.copyToTarget(key, ts, ticket, pos, oppType, volume);
+      await this.copyToTarget(key, ts, ticket, pos, volume);
     }
 
     return { added: key, syncedExisting: Object.keys(this.sourcePositions).length };
@@ -413,9 +424,8 @@ class OppositeCopier {
       const pos = this.sourcePositions[ticket];
       if (pos && mirror.status === "failed") {
         // Position still open on source — retry copy
-        const oppType = pos.type === "BUY" ? "SELL" : "BUY";
         const volume = Math.round(parseFloat(pos.volume) * this.config.volumeMult * 100) / 100;
-        await this.copyToTarget(targetKey, ts, ticket, pos, oppType, volume);
+        await this.copyToTarget(targetKey, ts, ticket, pos, volume);
         retried++;
       } else if (!pos && mirror.status === "close_failed") {
         // Position closed on source — retry close (we don't have pos anymore, but we have symbol from mirror)
@@ -438,6 +448,7 @@ class OppositeCopier {
         vpsId: ts.account.vpsId,
         server: ts.account.server,
         login: ts.account.login,
+        mode: ts.mode,
         synced,
         failed,
         total,

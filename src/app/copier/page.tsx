@@ -32,11 +32,14 @@ interface AccountOption {
   server: string;
 }
 
+type CopyMode = "follow" | "opposite";
+
 interface TargetStatus {
   key: string;
   vpsId: string;
   server: string;
   login: string;
+  mode: CopyMode;
   synced: number;
   failed: number;
   total: number;
@@ -58,7 +61,8 @@ interface CopierStatus {
 export default function CopierPage() {
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [sourceAccount, setSourceAccount] = useState("");
-  const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
+  const [selectedTargets, setSelectedTargets] = useState<Map<string, CopyMode>>(new Map());
+  const [addTargetMode, setAddTargetMode] = useState<CopyMode>("opposite");
   const [multiplier, setMultiplier] = useState("1.0");
   const [status, setStatus] = useState<CopierStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -133,19 +137,27 @@ export default function CopierPage() {
 
   function toggleTarget(key: string) {
     setSelectedTargets((prev) => {
-      const next = new Set(prev);
+      const next = new Map(prev);
       if (next.has(key)) next.delete(key);
-      else next.add(key);
+      else next.set(key, "opposite");
+      return next;
+    });
+  }
+
+  function setTargetMode(key: string, mode: CopyMode) {
+    setSelectedTargets((prev) => {
+      const next = new Map(prev);
+      next.set(key, mode);
       return next;
     });
   }
 
   function selectAllTargets() {
-    setSelectedTargets(new Set(availableTargets.map(accountKey)));
+    setSelectedTargets(new Map(availableTargets.map((a) => [accountKey(a), "opposite" as CopyMode])));
   }
 
   function deselectAllTargets() {
-    setSelectedTargets(new Set());
+    setSelectedTargets(new Map());
   }
 
   function findAccountByKey(key: string): AccountOption | undefined {
@@ -163,7 +175,10 @@ export default function CopierPage() {
     }
 
     const source = parseAccountKey(sourceAccount);
-    const targets = Array.from(selectedTargets).map(parseAccountKey);
+    const targets = Array.from(selectedTargets.entries()).map(([key, mode]) => ({
+      ...parseAccountKey(key),
+      mode,
+    }));
 
     setSubmitting(true);
     try {
@@ -227,14 +242,14 @@ export default function CopierPage() {
     }
   }
 
-  async function handleAddTarget(key: string) {
+  async function handleAddTarget(key: string, mode: CopyMode = "opposite") {
     const { vpsId, server, login } = parseAccountKey(key);
     setAddingTarget(true);
     try {
       const res = await fetch("/api/copier/add-target", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vpsId, server, login }),
+        body: JSON.stringify({ vpsId, server, login, mode }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -359,7 +374,7 @@ export default function CopierPage() {
                     setSourceAccount(val);
                     if (val) {
                       setSelectedTargets((prev) => {
-                        const next = new Set(prev);
+                        const next = new Map(prev);
                         next.delete(val);
                         return next;
                       });
@@ -413,10 +428,11 @@ export default function CopierPage() {
                       {availableTargets.map((a) => {
                         const key = accountKey(a);
                         const checked = selectedTargets.has(key);
+                        const mode = selectedTargets.get(key) ?? "opposite";
                         return (
-                          <label
+                          <div
                             key={key}
-                            className={`flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-zinc-700/50 ${
+                            className={`flex items-center gap-3 px-3 py-2 hover:bg-zinc-700/50 ${
                               checked ? "bg-zinc-700/30" : ""
                             } ${isRunning ? "pointer-events-none opacity-60" : ""}`}
                           >
@@ -425,10 +441,27 @@ export default function CopierPage() {
                               checked={checked}
                               onChange={() => toggleTarget(key)}
                               disabled={isRunning}
-                              className="accent-emerald-500"
+                              className="accent-emerald-500 cursor-pointer"
                             />
-                            <span className="text-sm text-zinc-200">{accountLabel(a)}</span>
-                          </label>
+                            <span className="flex-1 text-sm text-zinc-200 cursor-pointer" onClick={() => toggleTarget(key)}>
+                              {accountLabel(a)}
+                            </span>
+                            {checked && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setTargetMode(key, mode === "follow" ? "opposite" : "follow");
+                                }}
+                                className={`rounded px-2 py-0.5 text-xs font-medium ${
+                                  mode === "follow"
+                                    ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                                    : "bg-orange-500/20 text-orange-400 border border-orange-500/30"
+                                }`}
+                              >
+                                {mode}
+                              </button>
+                            )}
+                          </div>
                         );
                       })}
                     </div>
@@ -557,6 +590,13 @@ export default function CopierPage() {
                               {vpsName && (
                                 <span className="ml-2 text-xs text-zinc-500">({vpsName})</span>
                               )}
+                              <span className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                t.mode === "follow"
+                                  ? "bg-blue-500/20 text-blue-400"
+                                  : "bg-orange-500/20 text-orange-400"
+                              }`}>
+                                {t.mode}
+                              </span>
                             </td>
                             <td className="px-4 py-2">{targetStatusIcon(t)}</td>
                             <td className="px-4 py-2">{targetStatusBadge(t)}</td>
@@ -631,7 +671,7 @@ export default function CopierPage() {
                   <div className="flex items-center gap-2">
                     <Select
                       onValueChange={(v) => {
-                        if (typeof v === "string" && v) handleAddTarget(v);
+                        if (typeof v === "string" && v) handleAddTarget(v, addTargetMode);
                       }}
                       disabled={addingTarget}
                     >
@@ -650,6 +690,16 @@ export default function CopierPage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    <button
+                      onClick={() => setAddTargetMode(addTargetMode === "follow" ? "opposite" : "follow")}
+                      className={`rounded px-2 py-1 text-xs font-medium ${
+                        addTargetMode === "follow"
+                          ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                          : "bg-orange-500/20 text-orange-400 border border-orange-500/30"
+                      }`}
+                    >
+                      {addTargetMode}
+                    </button>
                   </div>
                 </div>
               )}
