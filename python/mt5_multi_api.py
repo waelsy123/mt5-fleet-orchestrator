@@ -542,10 +542,21 @@ def add_account(req: AddAccountRequest):
         shutil.copy2(str(ea_source), os.path.join(experts_dir, "PythonBridge.mq5"))
         steps.append("Copied PythonBridge EA to data dir")
 
-    # Copy common.ini to data dir config
+    # Copy common.ini and server config files to data dir config
     data_config = os.path.join(data_dir, "config")
     os.makedirs(data_config, exist_ok=True)
     shutil.copy2(os.path.join(config_dir, "common.ini"), os.path.join(data_config, "common.ini"))
+
+    # Copy cached server data (servers.dat, accounts.dat) so terminal can find broker IPs.
+    # The /auto silent installer creates a generic terminal with no broker server data.
+    # These files contain cached broker server addresses from a working MT5 install.
+    mt5_config_dir = os.path.join(BASE_DIR, "mt5_config")
+    for cfg_file in ("servers.dat", "accounts.dat"):
+        src = os.path.join(mt5_config_dir, cfg_file)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(data_config, cfg_file))
+    if os.path.exists(mt5_config_dir):
+        steps.append("Copied server config (servers.dat, accounts.dat)")
 
     # Wait for EA compilation (first install compiles ~123 files, takes ~90s)
     ex5_path = os.path.join(experts_dir, "PythonBridge.ex5")
