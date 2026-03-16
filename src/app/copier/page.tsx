@@ -3,7 +3,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -30,6 +29,7 @@ interface AccountOption {
   vpsName: string;
   login: string;
   server: string;
+  balance: number;
 }
 
 type CopyMode = "follow" | "opposite";
@@ -40,6 +40,7 @@ interface TargetStatus {
   server: string;
   login: string;
   mode: CopyMode;
+  volumeMult: number;
   synced: number;
   failed: number;
   total: number;
@@ -51,7 +52,6 @@ interface TargetStatus {
 interface CopierStatus {
   running: boolean;
   source: { vpsId: string; server: string; login: string } | null;
-  volumeMult: number;
   sourcePositions: number;
   targets: TargetStatus[];
   summary: { synced: number; failed: number; total: number; targetCount: number };
@@ -61,9 +61,8 @@ interface CopierStatus {
 export default function CopierPage() {
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [sourceAccount, setSourceAccount] = useState("");
-  const [selectedTargets, setSelectedTargets] = useState<Map<string, CopyMode>>(new Map());
+  const [selectedTargets, setSelectedTargets] = useState<Map<string, { mode: CopyMode; volumeMult: number | null }>>(new Map());
   const [addTargetMode, setAddTargetMode] = useState<CopyMode>("opposite");
-  const [multiplier, setMultiplier] = useState("1.0");
   const [status, setStatus] = useState<CopierStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -80,11 +79,12 @@ export default function CopierPage() {
         if (!res.ok) throw new Error("Failed to fetch accounts");
         const json = await res.json();
         setAccounts(
-          json.map((a: { vpsId: string; vpsName: string; login: string; server: string }) => ({
+          json.map((a: { vpsId: string; vpsName: string; login: string; server: string; balance: number }) => ({
             vpsId: a.vpsId,
             vpsName: a.vpsName,
             login: a.login,
             server: a.server,
+            balance: a.balance ?? 0,
           }))
         );
       } catch {
@@ -125,7 +125,8 @@ export default function CopierPage() {
   }
 
   function accountLabel(a: AccountOption) {
-    return `${a.login} @ ${a.server} (${a.vpsName})`;
+    const bal = a.balance > 0 ? ` — $${a.balance.toLocaleString()}` : "";
+    return `${a.login} @ ${a.server} (${a.vpsName}${bal})`;
   }
 
   function parseAccountKey(key: string) {
@@ -135,11 +136,27 @@ export default function CopierPage() {
 
   const availableTargets = accounts.filter((a) => accountKey(a) !== sourceAccount);
 
+  function getSourceBalance(): number {
+    if (!sourceAccount) return 0;
+    const src = accounts.find((a) => accountKey(a) === sourceAccount);
+    return src?.balance ?? 0;
+  }
+
+  function autoRatio(targetBalance: number): number {
+    const srcBal = getSourceBalance();
+    if (srcBal <= 0) return 1.0;
+    return Math.round((targetBalance / srcBal) * 100) / 100;
+  }
+
   function toggleTarget(key: string) {
     setSelectedTargets((prev) => {
       const next = new Map(prev);
-      if (next.has(key)) next.delete(key);
-      else next.set(key, "opposite");
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        const acct = accounts.find((a) => accountKey(a) === key);
+        next.set(key, { mode: "opposite", volumeMult: acct ? autoRatio(acct.balance) : null });
+      }
       return next;
     });
   }
@@ -147,13 +164,26 @@ export default function CopierPage() {
   function setTargetMode(key: string, mode: CopyMode) {
     setSelectedTargets((prev) => {
       const next = new Map(prev);
-      next.set(key, mode);
+      const existing = next.get(key);
+      next.set(key, { mode, volumeMult: existing?.volumeMult ?? null });
+      return next;
+    });
+  }
+
+  function setTargetVolumeMult(key: string, mult: number | null) {
+    setSelectedTargets((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(key);
+      next.set(key, { mode: existing?.mode ?? "opposite", volumeMult: mult });
       return next;
     });
   }
 
   function selectAllTargets() {
-    setSelectedTargets(new Map(availableTargets.map((a) => [accountKey(a), "opposite" as CopyMode])));
+    setSelectedTargets(new Map(availableTargets.map((a) => [
+      accountKey(a),
+      { mode: "opposite" as CopyMode, volumeMult: autoRatio(a.balance) },
+    ])));
   }
 
   function deselectAllTargets() {
@@ -175,9 +205,10 @@ export default function CopierPage() {
     }
 
     const source = parseAccountKey(sourceAccount);
-    const targets = Array.from(selectedTargets.entries()).map(([key, mode]) => ({
+    const targets = Array.from(selectedTargets.entries()).map(([key, opts]) => ({
       ...parseAccountKey(key),
-      mode,
+      mode: opts.mode,
+      ...(opts.volumeMult != null ? { volumeMult: opts.volumeMult } : {}),
     }));
 
     setSubmitting(true);
@@ -190,7 +221,6 @@ export default function CopierPage() {
           sourceServer: source.server,
           sourceLogin: source.login,
           targets,
-          volumeMult: parseFloat(multiplier),
         }),
       });
       if (!res.ok) {
@@ -364,7 +394,7 @@ export default function CopierPage() {
   }
 
   const sameFirmWarnings = computeSameFirmWarnings(
-    Array.from(selectedTargets.keys()).map((key) => parseAccountKey(key))
+    Array.from(selectedTargets.keys()).map(parseAccountKey)
   );
 
   const runningSameFirmWarnings = status?.targets
@@ -459,7 +489,9 @@ export default function CopierPage() {
                       {availableTargets.map((a) => {
                         const key = accountKey(a);
                         const checked = selectedTargets.has(key);
-                        const mode = selectedTargets.get(key) ?? "opposite";
+                        const opts = selectedTargets.get(key);
+                        const mode = opts?.mode ?? "opposite";
+                        const mult = opts?.volumeMult;
                         return (
                           <div
                             key={key}
@@ -478,19 +510,35 @@ export default function CopierPage() {
                               {accountLabel(a)}
                             </span>
                             {checked && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setTargetMode(key, mode === "follow" ? "opposite" : "follow");
-                                }}
-                                className={`rounded px-2 py-0.5 text-xs font-medium ${
-                                  mode === "follow"
-                                    ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
-                                    : "bg-orange-500/20 text-orange-400 border border-orange-500/30"
-                                }`}
-                              >
-                                {mode}
-                              </button>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] text-zinc-500">x</span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0.01"
+                                  value={mult ?? ""}
+                                  onChange={(e) => {
+                                    const v = parseFloat(e.target.value);
+                                    setTargetVolumeMult(key, isNaN(v) ? null : v);
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="w-16 rounded border border-zinc-600 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-200 text-right"
+                                  placeholder="auto"
+                                />
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setTargetMode(key, mode === "follow" ? "opposite" : "follow");
+                                  }}
+                                  className={`rounded px-2 py-0.5 text-xs font-medium ${
+                                    mode === "follow"
+                                      ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                                      : "bg-orange-500/20 text-orange-400 border border-orange-500/30"
+                                  }`}
+                                >
+                                  {mode}
+                                </button>
+                              </div>
                             )}
                           </div>
                         );
@@ -514,19 +562,6 @@ export default function CopierPage() {
                         </div>
                       </div>
                     )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-zinc-300">Volume Multiplier</Label>
-                    <Input
-                      type="number"
-                      step="0.1"
-                      min="0.1"
-                      value={multiplier}
-                      onChange={(e) => setMultiplier(e.target.value)}
-                      className="border-zinc-700 bg-zinc-800 text-zinc-100"
-                      disabled={isRunning}
-                    />
                   </div>
 
                   <div className="flex gap-3 pt-2">
@@ -569,10 +604,6 @@ export default function CopierPage() {
                   <span className="text-zinc-600">|</span>
                   <div className="text-sm text-zinc-400">
                     Positions: <span className="text-zinc-200">{status.sourcePositions}</span>
-                  </div>
-                  <span className="text-zinc-600">|</span>
-                  <div className="text-sm text-zinc-400">
-                    x<span className="text-zinc-200">{status.volumeMult}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -617,6 +648,7 @@ export default function CopierPage() {
                     <tr className="border-b border-zinc-700 text-left text-zinc-400">
                       <th className="px-4 py-2 font-medium"></th>
                       <th className="px-4 py-2 font-medium">Account</th>
+                      <th className="px-4 py-2 font-medium">Ratio</th>
                       <th className="px-4 py-2 font-medium">Status</th>
                       <th className="px-4 py-2 font-medium">Synced</th>
                       <th className="px-4 py-2 font-medium">Last Sync</th>
@@ -658,6 +690,7 @@ export default function CopierPage() {
                                 {t.mode}
                               </span>
                             </td>
+                            <td className="px-4 py-2 font-mono text-xs text-zinc-300">x{t.volumeMult}</td>
                             <td className="px-4 py-2">{targetStatusIcon(t)}</td>
                             <td className="px-4 py-2">{targetStatusBadge(t)}</td>
                             <td className="px-4 py-2 text-zinc-400">{timeSince(t.lastSyncedAt)}</td>
@@ -700,7 +733,7 @@ export default function CopierPage() {
                           </tr>
                           {isExpanded && (
                             <tr key={`${t.key}-log`}>
-                              <td colSpan={7} className="bg-black/50 px-4 py-2">
+                              <td colSpan={8} className="bg-black/50 px-4 py-2">
                                 <div className="max-h-[200px] overflow-auto rounded bg-black p-3 font-mono text-xs">
                                   {t.log.length > 0 ? (
                                     t.log.map((entry, i) => (

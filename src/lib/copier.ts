@@ -27,6 +27,7 @@ export interface TargetAccount {
   server: string;
   login: string;
   mode: CopyMode;
+  volumeMult: number;
 }
 
 interface TargetState {
@@ -44,7 +45,6 @@ export interface CopierConfig {
   sourceServer: string;
   sourceLogin: string;
   targets: TargetAccount[];
-  volumeMult: number;
 }
 
 function targetKey(t: TargetAccount) {
@@ -68,7 +68,6 @@ async function persistSession(config: CopierConfig | null, running: boolean) {
           sourceVpsId: config.sourceVpsId,
           sourceServer: config.sourceServer,
           sourceLogin: config.sourceLogin,
-          volumeMult: config.volumeMult,
           targets: JSON.parse(JSON.stringify(config.targets)),
         },
         update: {
@@ -76,7 +75,6 @@ async function persistSession(config: CopierConfig | null, running: boolean) {
           sourceVpsId: config.sourceVpsId,
           sourceServer: config.sourceServer,
           sourceLogin: config.sourceLogin,
-          volumeMult: config.volumeMult,
           targets: JSON.parse(JSON.stringify(config.targets)),
         },
       });
@@ -133,6 +131,11 @@ class OppositeCopier {
     return this.targetStates.has(key);
   }
 
+  getSourceInfo(): { vpsId: string; server: string; login: string } | null {
+    if (!this.running || !this.config) return null;
+    return { vpsId: this.config.sourceVpsId, server: this.config.sourceServer, login: this.config.sourceLogin };
+  }
+
   // Check if an account is currently the source in the running copier
   isActiveSource(vpsId: string, server: string, login: string): boolean {
     if (!this.running || !this.config) return false;
@@ -156,7 +159,7 @@ class OppositeCopier {
     this.running = true;
 
     const srcLabel = `${config.sourceLogin}@${config.sourceServer}`;
-    this.addGlobalLog("START", `Source: ${srcLabel} -> ${config.targets.length} target(s) (x${config.volumeMult})`);
+    this.addGlobalLog("START", `Source: ${srcLabel} -> ${config.targets.length} target(s)`);
 
     for (const t of config.targets) {
       const key = targetKey(t);
@@ -169,7 +172,7 @@ class OppositeCopier {
         lastSyncedAt: null,
         log: [],
       });
-      this.addTargetLog(key, "START", `Target initialized: ${t.login}@${t.server} [${mode}]`);
+      this.addTargetLog(key, "START", `Target initialized: ${t.login}@${t.server} [${mode}] x${t.volumeMult}`);
     }
 
     await persistSession(this.config, true);
@@ -264,12 +267,12 @@ class OppositeCopier {
 
     // Fan out new positions to all targets in parallel
     for (const [ticket, pos] of newTickets) {
-      const volume = Math.round(parseFloat(pos.volume) * this.config.volumeMult * 100) / 100;
-      this.addGlobalLog("NEW", `Source: ${pos.type} ${pos.volume} ${pos.symbol} (#${ticket}) -> ${volume} to ${this.targetStates.size} target(s)`);
+      this.addGlobalLog("NEW", `Source: ${pos.type} ${pos.volume} ${pos.symbol} (#${ticket}) -> ${this.targetStates.size} target(s)`);
 
-      const promises = Array.from(this.targetStates.entries()).map(([key, ts]) =>
-        this.copyToTarget(key, ts, ticket, pos, volume)
-      );
+      const promises = Array.from(this.targetStates.entries()).map(([key, ts]) => {
+        const volume = Math.round(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
+        return this.copyToTarget(key, ts, ticket, pos, volume);
+      });
       await Promise.allSettled(promises);
     }
 
@@ -384,13 +387,13 @@ class OppositeCopier {
     };
     this.targetStates.set(key, ts);
     this.config.targets.push(target);
-    this.addTargetLog(key, "START", `Target added while running: ${target.login}@${target.server} [${mode}]`);
-    this.addGlobalLog("ADD_TARGET", `Added target: ${target.login}@${target.server} [${mode}] (now ${this.targetStates.size} target(s))`);
+    this.addTargetLog(key, "START", `Target added while running: ${target.login}@${target.server} [${mode}] x${target.volumeMult}`);
+    this.addGlobalLog("ADD_TARGET", `Added target: ${target.login}@${target.server} [${mode}] x${target.volumeMult} (now ${this.targetStates.size} target(s))`);
     await persistSession(this.config, true);
 
     // Sync: copy all current source positions to the new target
     for (const [ticket, pos] of Object.entries(this.sourcePositions)) {
-      const volume = Math.round(parseFloat(pos.volume) * this.config.volumeMult * 100) / 100;
+      const volume = Math.round(parseFloat(pos.volume) * target.volumeMult * 100) / 100;
       await this.copyToTarget(key, ts, ticket, pos, volume);
     }
 
@@ -476,7 +479,7 @@ class OppositeCopier {
       const pos = this.sourcePositions[ticket];
       if (pos && mirror.status === "failed") {
         // Position still open on source — retry copy
-        const volume = Math.round(parseFloat(pos.volume) * this.config.volumeMult * 100) / 100;
+        const volume = Math.round(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
         await this.copyToTarget(targetKey, ts, ticket, pos, volume);
         retried++;
       } else if (!pos && mirror.status === "close_failed") {
@@ -501,6 +504,7 @@ class OppositeCopier {
         server: ts.account.server,
         login: ts.account.login,
         mode: ts.mode,
+        volumeMult: ts.account.volumeMult,
         synced,
         failed,
         total,
@@ -519,7 +523,6 @@ class OppositeCopier {
       source: this.config
         ? { vpsId: this.config.sourceVpsId, server: this.config.sourceServer, login: this.config.sourceLogin }
         : null,
-      volumeMult: this.config?.volumeMult ?? 1.0,
       sourcePositions: Object.keys(this.sourcePositions).length,
       targets,
       summary: { synced: totalSynced, failed: totalFailed, total: totalMirrors, targetCount: targets.length },
@@ -547,7 +550,6 @@ export async function restoreCopierFromDb() {
       sourceServer: session.sourceServer,
       sourceLogin: session.sourceLogin,
       targets,
-      volumeMult: session.volumeMult,
     });
   } catch (e) {
     console.error("[COPIER] Failed to restore session:", e);

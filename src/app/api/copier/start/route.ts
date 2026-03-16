@@ -6,12 +6,11 @@ import type { TargetAccount } from "@/lib/copier";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { sourceVpsId, sourceServer, sourceLogin, targets, volumeMult } = body as {
+    const { sourceVpsId, sourceServer, sourceLogin, targets } = body as {
       sourceVpsId: string;
       sourceServer: string;
       sourceLogin: string;
-      targets: TargetAccount[];
-      volumeMult?: number;
+      targets: (TargetAccount & { volumeMult?: number })[];
     };
 
     if (!sourceVpsId || !sourceServer || !sourceLogin) {
@@ -22,8 +21,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "At least one target account is required" }, { status: 400 });
     }
 
-    // Validate source exists
-    await prisma.account.findFirstOrThrow({
+    // Validate source exists and get balance
+    const sourceAccount = await prisma.account.findFirstOrThrow({
       where: { vpsId: sourceVpsId, server: sourceServer, login: sourceLogin },
     });
 
@@ -35,7 +34,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate targets exist, none is the source, and none is the current source of another copier session
+    // Validate targets and auto-calculate volumeMult from balance ratios
+    const resolvedTargets: TargetAccount[] = [];
     for (const t of targets) {
       if (t.vpsId === sourceVpsId && t.server === sourceServer && t.login === sourceLogin) {
         return NextResponse.json(
@@ -43,15 +43,26 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      // Reject if target is currently a source (master) in the running copier
       if (copier.isActiveSource(t.vpsId, t.server, t.login)) {
         return NextResponse.json(
           { error: `${t.login}@${t.server} is currently the copy source — a master cannot also be a slave` },
           { status: 400 }
         );
       }
-      await prisma.account.findFirstOrThrow({
+      const targetAccount = await prisma.account.findFirstOrThrow({
         where: { vpsId: t.vpsId, server: t.server, login: t.login },
+      });
+
+      // Use explicit volumeMult if provided, otherwise auto-calculate from balance ratio
+      const volumeMult = t.volumeMult ??
+        (sourceAccount.balance > 0 ? Math.round((targetAccount.balance / sourceAccount.balance) * 100) / 100 : 1.0);
+
+      resolvedTargets.push({
+        vpsId: t.vpsId,
+        server: t.server,
+        login: t.login,
+        mode: t.mode,
+        volumeMult,
       });
     }
 
@@ -59,8 +70,7 @@ export async function POST(request: NextRequest) {
       sourceVpsId,
       sourceServer,
       sourceLogin,
-      targets,
-      volumeMult: volumeMult ?? 1.0,
+      targets: resolvedTargets,
     });
 
     return NextResponse.json({ status: "OK", message: `Copier started: 1 source -> ${targets.length} target(s)` });

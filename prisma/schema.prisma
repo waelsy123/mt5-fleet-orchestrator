@@ -91,7 +91,6 @@ model CopierSession {
   sourceVpsId    String
   sourceServer   String
   sourceLogin    String
-  volumeMult     Float    @default(1.0)
   targets        Json     @default("[]")
   updatedAt      DateTime @updatedAt
 }
