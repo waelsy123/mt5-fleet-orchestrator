@@ -1,31 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { copier } from "@/lib/copier";
+import { copierManager } from "@/lib/copier";
 
 export async function POST(request: NextRequest) {
   try {
-    const { vpsId, server, login, mode, volumeMult: explicitMult } = await request.json();
+    const { sessionId, vpsId, server, login, mode, volumeMult: explicitMult } = await request.json();
 
-    if (!vpsId || !server || !login) {
-      return NextResponse.json({ error: "vpsId, server, and login are required" }, { status: 400 });
+    if (!sessionId || !vpsId || !server || !login) {
+      return NextResponse.json({ error: "sessionId, vpsId, server, and login are required" }, { status: 400 });
     }
 
-    // Validate account exists
-    const targetAccount = await prisma.account.findFirstOrThrow({
-      where: { vpsId, server, login },
-    });
+    const session = copierManager.getSession(sessionId);
+    if (!session) {
+      return NextResponse.json({ error: "Session not found" }, { status: 400 });
+    }
 
-    // Reject if this account is currently the source
-    if (copier.isActiveSource(vpsId, server, login)) {
+    // Reject if account is already in any session
+    if (copierManager.isInAnySession(vpsId, server, login)) {
       return NextResponse.json(
-        { error: `${login}@${server} is the copy source — a master cannot also be a slave` },
+        { error: `${login}@${server} is already in a copier session` },
         { status: 400 }
       );
     }
 
+    const targetAccount = await prisma.account.findFirstOrThrow({
+      where: { vpsId, server, login },
+    });
+
     // Auto-calculate volumeMult from balance ratio if not explicitly provided
     let volumeMult = explicitMult ?? 1.0;
-    const sourceInfo = copier.getSourceInfo();
+    const sourceInfo = session.getSourceInfo();
     if (sourceInfo && !explicitMult) {
       const sourceAccount = await prisma.account.findFirst({
         where: { vpsId: sourceInfo.vpsId, server: sourceInfo.server, login: sourceInfo.login },
@@ -35,7 +39,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const result = await copier.addTarget({ vpsId, server, login, mode: mode ?? "opposite", volumeMult });
+    const result = await session.addTarget({ vpsId, server, login, mode: mode ?? "opposite", volumeMult });
     if ("error" in result) {
       return NextResponse.json({ error: result.error }, { status: 400 });
     }
