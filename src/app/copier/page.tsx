@@ -287,12 +287,12 @@ export default function CopierPage() {
   }
 
   // Accounts not currently in the copier's target list (for the "add target" dropdown)
-  const activeTargetKeys = new Set(status?.targets.map((t) => t.key) ?? []);
+  const runningTargetKeys = new Set(status?.targets.map((t) => t.key) ?? []);
   const sourceKey = status?.source
     ? `${status.source.vpsId}|${status.source.server}|${status.source.login}`
     : sourceAccount;
   const addableAccounts = accounts.filter(
-    (a) => accountKey(a) !== sourceKey && !activeTargetKeys.has(accountKey(a))
+    (a) => accountKey(a) !== sourceKey && !runningTargetKeys.has(accountKey(a))
   );
 
   function logColor(action: string) {
@@ -340,6 +340,37 @@ export default function CopierPage() {
 
   const isRunning = status?.running === true;
 
+  // Accounts that are active targets (can't be selected as source)
+  const activeTargetKeys = new Set(status?.targets.map((t) => t.key) ?? []);
+
+  // Accounts available as source (exclude active targets)
+  const availableSources = accounts.filter((a) => !activeTargetKeys.has(accountKey(a)));
+
+  // Same-firm warning: detect multiple targets on the same server
+  function computeSameFirmWarnings(entries: { server: string; login: string }[]): string[] {
+    const serverCounts = new Map<string, string[]>();
+    for (const { server, login } of entries) {
+      const existing = serverCounts.get(server) ?? [];
+      existing.push(login);
+      serverCounts.set(server, existing);
+    }
+    const warnings: string[] = [];
+    for (const [server, logins] of serverCounts) {
+      if (logins.length > 1) {
+        warnings.push(`${server}: ${logins.join(", ")} (${logins.length} accounts)`);
+      }
+    }
+    return warnings;
+  }
+
+  const sameFirmWarnings = computeSameFirmWarnings(
+    Array.from(selectedTargets.keys()).map((key) => parseAccountKey(key))
+  );
+
+  const runningSameFirmWarnings = status?.targets
+    ? computeSameFirmWarnings(status.targets.map((t) => ({ server: t.server, login: t.login })))
+    : [];
+
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <h1 className="text-2xl font-bold text-zinc-100">Copy Trading</h1>
@@ -386,7 +417,7 @@ export default function CopierPage() {
                     <SelectValue placeholder="Select source account" />
                   </SelectTrigger>
                   <SelectContent className="border-zinc-700 bg-zinc-800">
-                    {accounts.map((a) => (
+                    {availableSources.map((a) => (
                       <SelectItem
                         key={`source-${accountKey(a)}`}
                         value={accountKey(a)}
@@ -465,6 +496,24 @@ export default function CopierPage() {
                         );
                       })}
                     </div>
+                    {sameFirmWarnings.length > 0 && (
+                      <div className="mt-2 rounded border border-yellow-500/30 bg-yellow-500/10 px-3 py-2">
+                        <div className="flex items-start gap-2">
+                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-400" />
+                          <div>
+                            <p className="text-xs font-medium text-yellow-400">
+                              Multiple accounts from the same firm
+                            </p>
+                            {sameFirmWarnings.map((w, i) => (
+                              <p key={i} className="text-xs text-yellow-300/70">{w}</p>
+                            ))}
+                            <p className="mt-1 text-[10px] text-yellow-400/50">
+                              Prop firms may flag identical trades across accounts on the same server.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -541,6 +590,17 @@ export default function CopierPage() {
                     </Badge>
                   )}
                 </div>
+              {runningSameFirmWarnings.length > 0 && (
+                <div className="mt-3 flex items-start gap-2 rounded border border-yellow-500/30 bg-yellow-500/10 px-3 py-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-400" />
+                  <div>
+                    <p className="text-xs font-medium text-yellow-400">Same firm</p>
+                    {runningSameFirmWarnings.map((w, i) => (
+                      <p key={i} className="text-xs text-yellow-300/70">{w}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
               </div>
             </CardContent>
           </Card>
