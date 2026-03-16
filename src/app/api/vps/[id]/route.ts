@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { copier } from "@/lib/copier";
 
 export async function GET(
   _request: NextRequest,
@@ -42,6 +43,7 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
+    copier.onVpsDeleted(id);
     await prisma.vps.delete({ where: { id } });
     return NextResponse.json({ success: true });
   } catch (err) {
