@@ -55,6 +55,37 @@ function now() {
   return new Date().toTimeString().slice(0, 8);
 }
 
+async function persistSession(config: CopierConfig | null, running: boolean) {
+  try {
+    if (!config || !running) {
+      await prisma.copierSession.deleteMany();
+    } else {
+      await prisma.copierSession.upsert({
+        where: { id: "singleton" },
+        create: {
+          id: "singleton",
+          running: true,
+          sourceVpsId: config.sourceVpsId,
+          sourceServer: config.sourceServer,
+          sourceLogin: config.sourceLogin,
+          volumeMult: config.volumeMult,
+          targets: JSON.parse(JSON.stringify(config.targets)),
+        },
+        update: {
+          running: true,
+          sourceVpsId: config.sourceVpsId,
+          sourceServer: config.sourceServer,
+          sourceLogin: config.sourceLogin,
+          volumeMult: config.volumeMult,
+          targets: JSON.parse(JSON.stringify(config.targets)),
+        },
+      });
+    }
+  } catch (e) {
+    console.error("[COPIER] Failed to persist session:", e);
+  }
+}
+
 class OppositeCopier {
   running = false;
   config: CopierConfig | null = null;
@@ -141,6 +172,7 @@ class OppositeCopier {
       this.addTargetLog(key, "START", `Target initialized: ${t.login}@${t.server} [${mode}]`);
     }
 
+    await persistSession(this.config, true);
     await this.snapshotExisting();
 
     this.timer = setInterval(() => {
@@ -160,6 +192,7 @@ class OppositeCopier {
     }
     this.clientCache = new Map();
     this.addGlobalLog("STOP", "Copier stopped");
+    persistSession(null, false);
   }
 
   private async snapshotExisting() {
@@ -353,6 +386,7 @@ class OppositeCopier {
     this.config.targets.push(target);
     this.addTargetLog(key, "START", `Target added while running: ${target.login}@${target.server} [${mode}]`);
     this.addGlobalLog("ADD_TARGET", `Added target: ${target.login}@${target.server} [${mode}] (now ${this.targetStates.size} target(s))`);
+    await persistSession(this.config, true);
 
     // Sync: copy all current source positions to the new target
     for (const [ticket, pos] of Object.entries(this.sourcePositions)) {
@@ -373,6 +407,7 @@ class OppositeCopier {
     this.config.targets = this.config.targets.filter((t) => targetKey(t) !== key);
     this.clientCache.delete(ts.account.vpsId);
     this.addGlobalLog("REMOVE_TARGET", `Removed target: ${ts.account.login}@${ts.account.server} (now ${this.targetStates.size} target(s))`);
+    persistSession(this.config, this.targetStates.size > 0);
 
     // If no targets left, stop the copier
     if (this.targetStates.size === 0) {
@@ -494,3 +529,27 @@ class OppositeCopier {
 }
 
 export const copier = new OppositeCopier();
+
+export async function restoreCopierFromDb() {
+  try {
+    const session = await prisma.copierSession.findUnique({ where: { id: "singleton" } });
+    if (!session || !session.running) return;
+
+    const targets = session.targets as unknown as TargetAccount[];
+    if (!targets || targets.length === 0) {
+      await prisma.copierSession.deleteMany();
+      return;
+    }
+
+    console.log(`[COPIER] Restoring session: ${session.sourceLogin}@${session.sourceServer} -> ${targets.length} target(s)`);
+    await copier.start({
+      sourceVpsId: session.sourceVpsId,
+      sourceServer: session.sourceServer,
+      sourceLogin: session.sourceLogin,
+      targets,
+      volumeMult: session.volumeMult,
+    });
+  } catch (e) {
+    console.error("[COPIER] Failed to restore session:", e);
+  }
+}
