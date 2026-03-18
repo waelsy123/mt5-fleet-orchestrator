@@ -101,6 +101,7 @@ class CopierSession {
   running = false;
   config: CopierConfig | null = null;
   private sourcePositions: Record<string, TrackedPosition> = {};
+  private preExistingTickets: Set<string> = new Set(); // tickets that existed at session start — never copy these
   private targetStates: Map<string, TargetState> = new Map();
   private globalLog: LogEntry[] = [];
   private maxLog = 200;
@@ -153,11 +154,12 @@ class CopierSession {
     return { vpsId: this.config.sourceVpsId, server: this.config.sourceServer, login: this.config.sourceLogin };
   }
 
-  async start(config: CopierConfig) {
+  async start(config: CopierConfig, restore = false) {
     if (this.running) this.stop();
 
     this.config = config;
     this.sourcePositions = {};
+    this.preExistingTickets = new Set();
     this.targetStates = new Map();
     this.globalLog = [];
     this.running = true;
@@ -181,6 +183,10 @@ class CopierSession {
 
     await persistSession(this.id, this.config, true);
     await this.snapshotExisting();
+
+    if (restore) {
+      await this.reconstructMirrors();
+    }
 
     this.timer = setInterval(() => {
       if (!this.running || this.polling) return;
@@ -209,6 +215,7 @@ class CopierSession {
           const ticket = String(p.pos);
           if (ticket) {
             this.sourcePositions[ticket] = { symbol: p.symbol, type: p.type, volume: String(p.volume) };
+            this.preExistingTickets.add(ticket);
           }
         }
       }
@@ -216,6 +223,51 @@ class CopierSession {
     } catch (e) {
       this.log("ERROR", `Snapshot failed: ${e}`);
     }
+  }
+
+  /**
+   * After a restore, scan target accounts for positions with `copy_*` comments
+   * and rebuild the mirrors map so closes/partial-closes propagate correctly.
+   */
+  private async reconstructMirrors() {
+    if (!this.config) return;
+
+    for (const [key, ts] of this.targetStates) {
+      try {
+        const client = await getClient(ts.account.vpsId);
+        const result = await client.getPositions(ts.account.server, ts.account.login);
+        if (!result.positions) continue;
+
+        for (const p of result.positions) {
+          const comment = String(p.comment ?? "");
+          if (!comment.startsWith("copy_")) continue;
+          const sourceTicket = comment.slice(5); // strip "copy_" prefix
+          if (sourceTicket in this.sourcePositions) {
+            const targetTicket = parseInt(String(p.pos), 10);
+            ts.mirrors[sourceTicket] = {
+              status: "synced",
+              targetTicket: !isNaN(targetTicket) ? targetTicket : undefined,
+            };
+          }
+        }
+
+        const count = Object.keys(ts.mirrors).length;
+        this.addTargetLog(key, "RESTORE", `Reconstructed ${count} mirror(s) from target positions`);
+      } catch (e) {
+        this.addTargetLog(key, "ERROR", `Mirror reconstruction failed: ${e}`);
+      }
+    }
+
+    // On restore, pre-existing tickets that have mirrors are NOT pre-existing —
+    // they were copied before the restart. Clear them from the pre-existing set
+    // so closes propagate correctly.
+    for (const ts of this.targetStates.values()) {
+      for (const ticket of Object.keys(ts.mirrors)) {
+        this.preExistingTickets.delete(ticket);
+      }
+    }
+
+    this.log("RESTORE", `Mirror state reconstructed for ${this.targetStates.size} target(s)`);
   }
 
   private async poll() {
@@ -268,6 +320,11 @@ class CopierSession {
       this.log("NEW", `Source: ${pos.type} ${pos.volume} ${pos.symbol} (#${ticket}) -> ${this.targetStates.size} target(s)`);
       const promises = Array.from(this.targetStates.entries()).map(([key, ts]) => {
         const volume = Math.floor(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
+        if (volume < 0.01) {
+          this.addTargetLog(key, "SKIP", `Volume too small (${volume}) for ${pos.symbol} #${ticket} — min lot is 0.01`);
+          ts.mirrors[ticket] = { status: "synced" }; // mark as handled so close works later
+          return Promise.resolve();
+        }
         return this.copyToTarget(key, ts, ticket, pos, volume);
       });
       await Promise.allSettled(promises);
@@ -307,10 +364,11 @@ class CopierSession {
 
       const r = result as Record<string, string>;
       if (r?.status === "OK") {
-        ts.mirrors[ticket] = { status: "synced" };
+        const orderNum = r.order ? parseInt(r.order, 10) : undefined;
+        ts.mirrors[ticket] = { status: "synced", targetTicket: orderNum && !isNaN(orderNum) ? orderNum : undefined };
         ts.lastSyncedAt = Date.now();
         ts.lastError = null;
-        this.addTargetLog(key, "COPIED", `${tradeType} ${volume} ${pos.symbol} @ ${r.price ?? "?"} — Deal #${r.deal ?? "?"} [${ts.mode}]`);
+        this.addTargetLog(key, "COPIED", `${tradeType} ${volume} ${pos.symbol} @ ${r.price ?? "?"} — Deal #${r.deal ?? "?"} ticket #${orderNum ?? "?"} [${ts.mode}]`);
       } else {
         const err = r?.message ?? r?.raw ?? JSON.stringify(result);
         ts.mirrors[ticket] = { status: "failed", error: err };
@@ -368,7 +426,7 @@ class CopierSession {
         this.addTargetLog(key, "CLOSED", `Closed ${pos.symbol} ticket #${targetTicket}`);
       } else {
         const err = result?.message ?? result?.raw ?? JSON.stringify(result);
-        ts.mirrors[ticket] = { status: "close_failed", error: err };
+        ts.mirrors[ticket] = { status: "close_failed", error: err, targetTicket: !isNaN(targetTicket) ? targetTicket : undefined };
         ts.lastError = err;
         this.addTargetLog(key, "FAIL", `Close ${pos.symbol} ticket #${targetTicket}: ${err}`);
       }
@@ -442,12 +500,20 @@ class CopierSession {
     this.log("ADD_TARGET", `Added target: ${target.login}@${target.server} [${mode}] x${target.volumeMult} (now ${this.targetStates.size})`);
     await persistSession(this.id, this.config, true);
 
+    let synced = 0;
     for (const [ticket, pos] of Object.entries(this.sourcePositions)) {
+      if (this.preExistingTickets.has(ticket)) continue; // don't copy pre-existing positions
       const volume = Math.floor(parseFloat(pos.volume) * target.volumeMult * 100) / 100;
+      if (volume < 0.01) {
+        this.addTargetLog(key, "SKIP", `Volume too small (${volume}) for ${pos.symbol} #${ticket}`);
+        ts.mirrors[ticket] = { status: "synced" };
+        continue;
+      }
       await this.copyToTarget(key, ts, ticket, pos, volume);
+      synced++;
     }
 
-    return { added: key, syncedExisting: Object.keys(this.sourcePositions).length };
+    return { added: key, syncedExisting: synced };
   }
 
   removeTarget(key: string) {
@@ -622,7 +688,7 @@ class CopierManager {
     // update nextId to avoid collisions
     const num = parseInt(id.replace("session_", ""), 10);
     if (!isNaN(num) && num >= this.nextId) this.nextId = num + 1;
-    await session.start(config);
+    await session.start(config, true); // restore=true triggers mirror reconstruction
   }
 }
 
