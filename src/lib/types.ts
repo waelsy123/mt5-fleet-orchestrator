@@ -22,6 +22,7 @@ export interface VpsPosition {
   profit: number;
   sl: number;
   tp: number;
+  comment: string;
 }
 
 export interface VpsPositions {

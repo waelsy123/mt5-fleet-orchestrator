@@ -18,6 +18,7 @@ type MirrorStatus = "synced" | "failed" | "closing" | "closed" | "close_failed";
 interface MirrorState {
   status: MirrorStatus;
   error?: string;
+  targetTicket?: number; // position ticket on the target account
 }
 
 export type CopyMode = "follow" | "opposite";
@@ -303,19 +304,51 @@ class CopierSession {
   }
 
   private async closeOnTarget(key: string, ts: TargetState, ticket: string, pos: TrackedPosition) {
-    if (!ts.mirrors[ticket]) return;
+    const mirror = ts.mirrors[ticket];
+    if (!mirror) return;
+
     try {
       const client = await getClient(ts.account.vpsId);
-      const result = await client.close(ts.account.server, ts.account.login, pos.symbol) as Record<string, string>;
+      const comment = `copy_${ticket}`;
+
+      // If we have the target ticket cached, close by ticket directly
+      if (mirror.targetTicket) {
+        const result = await client.closeTicket(ts.account.server, ts.account.login, mirror.targetTicket) as Record<string, string>;
+        if (result?.status === "OK") {
+          ts.mirrors[ticket] = { status: "closed" };
+          ts.lastSyncedAt = Date.now();
+          this.addTargetLog(key, "CLOSED", `Closed ${pos.symbol} ticket #${mirror.targetTicket}`);
+          return;
+        }
+        // If close-ticket failed (e.g. already closed), fall through to comment search
+        this.addTargetLog(key, "WARN", `Close ticket #${mirror.targetTicket} failed, searching by comment`);
+      }
+
+      // Fallback: find the copied position by comment and close by ticket
+      const positions = await client.getPositions(ts.account.server, ts.account.login);
+      const copied = positions.positions?.find(
+        (p) => p.comment === comment
+      );
+
+      if (!copied) {
+        // Position already closed (manually or otherwise) — just mark it
+        ts.mirrors[ticket] = { status: "closed" };
+        ts.lastSyncedAt = Date.now();
+        this.addTargetLog(key, "CLOSED", `${pos.symbol} already closed on target`);
+        return;
+      }
+
+      const targetTicket = parseInt(String(copied.pos), 10);
+      const result = await client.closeTicket(ts.account.server, ts.account.login, targetTicket) as Record<string, string>;
       if (result?.status === "OK") {
         ts.mirrors[ticket] = { status: "closed" };
         ts.lastSyncedAt = Date.now();
-        this.addTargetLog(key, "CLOSED", `Closed ${pos.symbol} — ${result.closed ?? "?"} position(s)`);
+        this.addTargetLog(key, "CLOSED", `Closed ${pos.symbol} ticket #${targetTicket}`);
       } else {
         const err = result?.message ?? result?.raw ?? JSON.stringify(result);
         ts.mirrors[ticket] = { status: "close_failed", error: err };
         ts.lastError = err;
-        this.addTargetLog(key, "FAIL", `Close ${pos.symbol}: ${err}`);
+        this.addTargetLog(key, "FAIL", `Close ${pos.symbol} ticket #${targetTicket}: ${err}`);
       }
     } catch (e) {
       const err = String(e);
