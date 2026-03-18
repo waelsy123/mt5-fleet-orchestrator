@@ -168,6 +168,20 @@ export class VpsClient {
     );
   }
 
+  async closeTicket(
+    server: string,
+    login: string,
+    ticket: number
+  ): Promise<unknown> {
+    return this.request(
+      `/accounts/${encodeURIComponent(server)}/${login}/close-ticket`,
+      {
+        method: "POST",
+        body: JSON.stringify({ ticket }),
+      }
+    );
+  }
+
   async getCopierStatus(): Promise<unknown> {
     return this.request("/copier/status");
   }
