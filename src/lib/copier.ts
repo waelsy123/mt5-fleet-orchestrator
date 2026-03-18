@@ -267,7 +267,7 @@ class CopierSession {
     for (const [ticket, pos] of newTickets) {
       this.log("NEW", `Source: ${pos.type} ${pos.volume} ${pos.symbol} (#${ticket}) -> ${this.targetStates.size} target(s)`);
       const promises = Array.from(this.targetStates.entries()).map(([key, ts]) => {
-        const volume = Math.round(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
+        const volume = Math.floor(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
         return this.copyToTarget(key, ts, ticket, pos, volume);
       });
       await Promise.allSettled(promises);
@@ -384,7 +384,7 @@ class CopierSession {
     const mirror = ts.mirrors[ticket];
     if (!mirror || mirror.status !== "synced") return;
 
-    const closeVolume = Math.round(sourceReduction * ts.account.volumeMult * 100) / 100;
+    const closeVolume = Math.floor(sourceReduction * ts.account.volumeMult * 100) / 100;
     if (closeVolume <= 0) return;
 
     try {
@@ -443,7 +443,7 @@ class CopierSession {
     await persistSession(this.id, this.config, true);
 
     for (const [ticket, pos] of Object.entries(this.sourcePositions)) {
-      const volume = Math.round(parseFloat(pos.volume) * target.volumeMult * 100) / 100;
+      const volume = Math.floor(parseFloat(pos.volume) * target.volumeMult * 100) / 100;
       await this.copyToTarget(key, ts, ticket, pos, volume);
     }
 
@@ -484,7 +484,7 @@ class CopierSession {
     for (const [ticket, mirror] of failedTickets) {
       const pos = this.sourcePositions[ticket];
       if (pos && mirror.status === "failed") {
-        const volume = Math.round(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
+        const volume = Math.floor(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
         await this.copyToTarget(tk, ts, ticket, pos, volume);
         retried++;
       }
