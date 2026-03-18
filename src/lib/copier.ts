@@ -249,6 +249,19 @@ class CopierSession {
       if (!(ticket in current)) closedTickets.push([ticket, pos]);
     }
 
+    // Detect partial closes: same ticket, reduced volume
+    const partialCloses: [string, number][] = []; // [ticket, volumeReduction]
+    for (const [ticket, pos] of Object.entries(current)) {
+      const prev = this.sourcePositions[ticket];
+      if (prev) {
+        const prevVol = parseFloat(prev.volume);
+        const curVol = parseFloat(pos.volume);
+        if (curVol < prevVol - 0.001) { // tolerance for float comparison
+          partialCloses.push([ticket, prevVol - curVol]);
+        }
+      }
+    }
+
     this.sourcePositions = current;
 
     for (const [ticket, pos] of newTickets) {
@@ -264,6 +277,15 @@ class CopierSession {
       this.log("CLOSED", `Source closed ${pos.type} ${pos.volume} ${pos.symbol} (#${ticket}) -> Closing on ${this.targetStates.size} target(s)`);
       const promises = Array.from(this.targetStates.entries()).map(([key, ts]) =>
         this.closeOnTarget(key, ts, ticket, pos)
+      );
+      await Promise.allSettled(promises);
+    }
+
+    for (const [ticket, reduction] of partialCloses) {
+      const pos = current[ticket];
+      this.log("PARTIAL", `Source partial close ${reduction.toFixed(2)} of ${pos.symbol} (#${ticket}), remaining ${pos.volume}`);
+      const promises = Array.from(this.targetStates.entries()).map(([key, ts]) =>
+        this.partialCloseOnTarget(key, ts, ticket, pos, reduction)
       );
       await Promise.allSettled(promises);
     }
@@ -355,6 +377,47 @@ class CopierSession {
       ts.mirrors[ticket] = { status: "close_failed", error: err };
       ts.lastError = err;
       this.addTargetLog(key, "ERROR", `Close failed: ${err}`);
+    }
+  }
+
+  private async partialCloseOnTarget(key: string, ts: TargetState, ticket: string, pos: TrackedPosition, sourceReduction: number) {
+    const mirror = ts.mirrors[ticket];
+    if (!mirror || mirror.status !== "synced") return;
+
+    const closeVolume = Math.round(sourceReduction * ts.account.volumeMult * 100) / 100;
+    if (closeVolume <= 0) return;
+
+    try {
+      const client = await getClient(ts.account.vpsId);
+      const comment = `copy_${ticket}`;
+
+      // Find the target ticket
+      let targetTicket = mirror.targetTicket;
+      if (!targetTicket) {
+        const positions = await client.getPositions(ts.account.server, ts.account.login);
+        const copied = positions.positions?.find((p) => p.comment === comment);
+        if (!copied) {
+          this.addTargetLog(key, "WARN", `Partial close: copied position not found for ${pos.symbol} (#${ticket})`);
+          return;
+        }
+        targetTicket = parseInt(String(copied.pos), 10);
+        mirror.targetTicket = targetTicket;
+      }
+
+      const result = await client.closeTicket(ts.account.server, ts.account.login, targetTicket, closeVolume) as Record<string, string>;
+      if (result?.status === "OK") {
+        ts.lastSyncedAt = Date.now();
+        ts.lastError = null;
+        this.addTargetLog(key, "PARTIAL", `Partial close ${closeVolume} of ${pos.symbol} ticket #${targetTicket}`);
+      } else {
+        const err = result?.message ?? result?.raw ?? JSON.stringify(result);
+        ts.lastError = err;
+        this.addTargetLog(key, "FAIL", `Partial close ${closeVolume} ${pos.symbol} ticket #${targetTicket}: ${err}`);
+      }
+    } catch (e) {
+      const err = String(e);
+      ts.lastError = err;
+      this.addTargetLog(key, "ERROR", `Partial close failed: ${err}`);
     }
   }
 
