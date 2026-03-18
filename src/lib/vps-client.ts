@@ -171,13 +171,16 @@ export class VpsClient {
   async closeTicket(
     server: string,
     login: string,
-    ticket: number
+    ticket: number,
+    volume?: number
   ): Promise<unknown> {
+    const body: Record<string, unknown> = { ticket };
+    if (volume !== undefined) body.volume = volume;
     return this.request(
       `/accounts/${encodeURIComponent(server)}/${login}/close-ticket`,
       {
         method: "POST",
-        body: JSON.stringify({ ticket }),
+        body: JSON.stringify(body),
       }
     );
   }
