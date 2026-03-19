@@ -516,11 +516,24 @@ class CopierSession {
     return { added: key, syncedExisting: synced };
   }
 
-  removeTarget(key: string) {
+  removeTarget(key: string, force = false) {
     if (!this.running || !this.config) return { error: "Session not running" };
 
     const ts = this.targetStates.get(key);
     if (!ts) return { error: "Target not found" };
+
+    // Check for active (synced) mirrors — these are open positions on the target
+    if (!force) {
+      const activeMirrors = Object.entries(ts.mirrors).filter(
+        ([, m]) => m.status === "synced" && m.targetTicket
+      );
+      if (activeMirrors.length > 0) {
+        return {
+          error: `Cannot remove — ${activeMirrors.length} active copied trade(s) on ${ts.account.login}@${ts.account.server}. Close them first or use force.`,
+          activeCount: activeMirrors.length,
+        };
+      }
+    }
 
     this.targetStates.delete(key);
     this.config.targets = this.config.targets.filter((t) => targetKey(t) !== key);
