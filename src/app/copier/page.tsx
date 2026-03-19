@@ -570,17 +570,28 @@ function SessionCard({
     }
   }
 
-  async function handleRemoveTarget(targetKey: string) {
+  async function handleRemoveTarget(targetKey: string, force = false) {
     setRemovingTarget(targetKey);
     try {
       const res = await fetch("/api/copier/remove-target", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: session.id, targetKey }),
+        body: JSON.stringify({ sessionId: session.id, targetKey, force }),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to remove target");
+        if (res.status === 409 && data.activeCount) {
+          const confirmed = window.confirm(
+            `${data.error}\n\nRemove anyway? The copied positions will NOT be closed automatically.`
+          );
+          if (confirmed) {
+            await handleRemoveTarget(targetKey, true);
+            return;
+          }
+        } else {
+          throw new Error(data.error || "Failed to remove target");
+        }
+        return;
       }
       toast.success("Target removed");
       onRefresh();
