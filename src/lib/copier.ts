@@ -195,6 +195,56 @@ class CopierSession {
     }, 2000);
   }
 
+  /** Count active copied positions across all targets. */
+  activeTradeCount(): number {
+    let count = 0;
+    for (const ts of this.targetStates.values()) {
+      for (const m of Object.values(ts.mirrors)) {
+        if (m.status === "synced" && m.targetTicket) count++;
+      }
+    }
+    return count;
+  }
+
+  /** Close all copied positions on all targets, then stop the session. */
+  async stopAndClose(): Promise<{ closed: number; failed: number }> {
+    // Stop polling first so no new trades are copied
+    this.running = false;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+
+    let closed = 0;
+    let failed = 0;
+    for (const [key, ts] of this.targetStates) {
+      const client = await getClient(ts.account.vpsId);
+      for (const [ticket, mirror] of Object.entries(ts.mirrors)) {
+        if (mirror.status !== "synced" || !mirror.targetTicket) continue;
+        try {
+          const result = await client.closeTicket(
+            ts.account.server, ts.account.login, mirror.targetTicket
+          ) as Record<string, string>;
+          if (result?.status === "OK") {
+            ts.mirrors[ticket] = { status: "closed" };
+            closed++;
+            this.addTargetLog(key, "CLOSE", `Closed #${mirror.targetTicket} (session stop)`);
+          } else {
+            failed++;
+            this.addTargetLog(key, "ERROR", `Failed to close #${mirror.targetTicket} on stop`);
+          }
+        } catch (err) {
+          failed++;
+          this.addTargetLog(key, "ERROR", `Close #${mirror.targetTicket} error: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+    }
+
+    this.log("STOP", `Copier stopped: closed ${closed} position(s), ${failed} failed`);
+    persistSession(this.id, null, false);
+    return { closed, failed };
+  }
+
   stop() {
     this.running = false;
     if (this.timer) {
@@ -634,10 +684,18 @@ class CopierManager {
     return { sessionId: id };
   }
 
-  stopSession(sessionId: string) {
+  stopSession(sessionId: string, closePositions = false) {
     const session = this.sessions.get(sessionId);
     if (!session) return { error: "Session not found" };
-    session.stop();
+
+    if (closePositions) {
+      // Close all copied positions then stop — async but we delete from map immediately
+      session.stopAndClose().then(() => {
+        // already persisted inside stopAndClose
+      });
+    } else {
+      session.stop();
+    }
     this.sessions.delete(sessionId);
     return { stopped: sessionId };
   }

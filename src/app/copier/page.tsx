@@ -507,16 +507,30 @@ function SessionCard({
     (a) => accountKey(a) !== sourceKey && !usedAccountKeys.has(accountKey(a)) && !sessionTargetKeys.has(accountKey(a))
   );
 
-  async function handleStop() {
+  async function handleStop(force = false) {
     setSubmitting(true);
     try {
       const res = await fetch("/api/copier/stop", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: session.id }),
+        body: JSON.stringify({ sessionId: session.id, force }),
       });
-      if (!res.ok) throw new Error("Failed to stop session");
-      toast.success("Session stopped");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 409 && data.activeCount) {
+          const confirmed = window.confirm(
+            `${data.activeCount} active copied trade(s) on target accounts.\n\nClose all copied positions and stop the session?`
+          );
+          if (confirmed) {
+            await handleStop(true);
+            return;
+          }
+        } else {
+          throw new Error(data.error || "Failed to stop session");
+        }
+        return;
+      }
+      toast.success(data.message || "Session stopped");
       onRefresh();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to stop");
@@ -680,7 +694,7 @@ function SessionCard({
                 </Link>
                 <Button
                   size="sm"
-                  onClick={handleStop}
+                  onClick={() => handleStop()}
                   disabled={submitting}
                   variant="ghost"
                   className="text-red-500 hover:text-red-400 hover:bg-red-500/10"
