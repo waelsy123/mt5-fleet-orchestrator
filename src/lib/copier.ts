@@ -737,7 +737,9 @@ class CopierManager {
   }
 }
 
-export const copierManager = new CopierManager();
+const globalForCopier = global as unknown as { copierManager: CopierManager };
+export const copierManager = globalForCopier.copierManager || new CopierManager();
+globalForCopier.copierManager = copierManager;
 
 // Backwards compat: single-session convenience (used by some routes)
 export const copier = {
