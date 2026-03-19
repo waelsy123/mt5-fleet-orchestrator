@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "echo \"UPDATE _prisma_migrations SET finished_at = started_at, rolled_back_at = NULL, logs = NULL WHERE migration_name = '0001_init' AND finished_at IS NULL;\" | prisma db execute --stdin; prisma migrate deploy && prisma generate && next build",
+    "build": "prisma generate && node prisma/fix-migrations.mjs && prisma migrate deploy && next build",
     "start": "next start",
     "lint": "eslint"
   },
