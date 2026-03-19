@@ -65,6 +65,20 @@ export interface AddAccountRequest {
   installer_path?: string;
 }
 
+export interface VpsSystemStats {
+  cpuPercent: number | null;
+  memoryPercent: number | null;
+  memoryTotalMB: number | null;
+  memoryUsedMB: number | null;
+  memoryFreeMB: number | null;
+  diskTotalGB: number | null;
+  diskUsedGB: number | null;
+  diskFreeGB: number | null;
+  diskPercent: number | null;
+  mt5Processes: number | null;
+  uptimeSeconds: number | null;
+}
+
 export interface CopierStartRequest {
   source: string;
   target: string;

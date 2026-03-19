@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Plus, Trash2, Play, RefreshCw, Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { Plus, Trash2, Play, RefreshCw, Loader2, CheckCircle2, XCircle, Cpu, HardDrive, MemoryStick, Monitor } from "lucide-react";
 import { formatCurrency, formatProfit, profitColor } from "@/lib/format";
 
 interface Account {
@@ -34,6 +34,20 @@ interface Account {
   equity: number;
   profit: number;
   connected: boolean;
+}
+
+interface SystemStats {
+  cpuPercent: number | null;
+  memoryPercent: number | null;
+  memoryTotalMB: number | null;
+  memoryUsedMB: number | null;
+  memoryFreeMB: number | null;
+  diskTotalGB: number | null;
+  diskUsedGB: number | null;
+  diskFreeGB: number | null;
+  diskPercent: number | null;
+  mt5Processes: number | null;
+  uptimeSeconds: number | null;
 }
 
 interface VpsDetail {
@@ -84,6 +98,16 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
   const [setupJobId, setSetupJobId] = useState<string | null>(null);
   const [setupSteps, setSetupSteps] = useState<string[]>([]);
   const [setupStatus, setSetupStatus] = useState<"idle" | "running" | "success" | "failed">("idle");
+  const [stats, setStats] = useState<SystemStats | null>(null);
+
+  async function fetchStats() {
+    try {
+      const res = await fetch(`/api/vps/${id}/stats`);
+      if (res.ok) setStats(await res.json());
+    } catch {
+      // VPS might be offline
+    }
+  }
 
   async function fetchVps() {
     try {
@@ -101,6 +125,7 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
 
   useEffect(() => {
     fetchVps();
+    fetchStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -314,6 +339,42 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
           )}
         </div>
       </div>
+
+      {/* System Resources */}
+      {stats && (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <ResourceCard
+            icon={<Cpu className="h-4 w-4" />}
+            label="CPU"
+            value={stats.cpuPercent != null ? `${stats.cpuPercent}%` : "--"}
+            percent={stats.cpuPercent}
+          />
+          <ResourceCard
+            icon={<MemoryStick className="h-4 w-4" />}
+            label="Memory"
+            value={stats.memoryUsedMB != null && stats.memoryTotalMB != null
+              ? `${(stats.memoryUsedMB / 1024).toFixed(1)} / ${(stats.memoryTotalMB / 1024).toFixed(1)} GB`
+              : "--"}
+            percent={stats.memoryPercent}
+            sub={stats.memoryFreeMB != null ? `${(stats.memoryFreeMB / 1024).toFixed(1)} GB free` : undefined}
+          />
+          <ResourceCard
+            icon={<HardDrive className="h-4 w-4" />}
+            label="Disk"
+            value={stats.diskUsedGB != null && stats.diskTotalGB != null
+              ? `${stats.diskUsedGB} / ${stats.diskTotalGB} GB`
+              : "--"}
+            percent={stats.diskPercent}
+            sub={stats.diskFreeGB != null ? `${stats.diskFreeGB} GB free` : undefined}
+          />
+          <ResourceCard
+            icon={<Monitor className="h-4 w-4" />}
+            label="MT5 Terminals"
+            value={stats.mt5Processes != null ? String(stats.mt5Processes) : "--"}
+            sub={stats.uptimeSeconds != null ? `Up ${formatUptime(stats.uptimeSeconds)}` : undefined}
+          />
+        </div>
+      )}
 
       <Card className="border-zinc-700 bg-zinc-900">
         <CardHeader className="flex flex-row items-center justify-between">
@@ -534,4 +595,53 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
       </Card>
     </div>
   );
+}
+
+function ResourceCard({
+  icon,
+  label,
+  value,
+  percent,
+  sub,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  percent?: number | null;
+  sub?: string;
+}) {
+  const barColor =
+    percent == null ? "bg-zinc-600"
+    : percent >= 90 ? "bg-red-500"
+    : percent >= 70 ? "bg-yellow-500"
+    : "bg-emerald-500";
+
+  return (
+    <Card className="border-zinc-700 bg-zinc-900">
+      <CardContent className="p-4">
+        <div className="flex items-center gap-2 text-zinc-400 mb-2">
+          {icon}
+          <span className="text-xs font-medium">{label}</span>
+        </div>
+        <div className="text-sm font-medium text-zinc-100">{value}</div>
+        {percent != null && (
+          <div className="mt-2 h-1.5 w-full rounded-full bg-zinc-800">
+            <div
+              className={`h-full rounded-full transition-all ${barColor}`}
+              style={{ width: `${Math.min(percent, 100)}%` }}
+            />
+          </div>
+        )}
+        {sub && <div className="mt-1 text-[11px] text-zinc-500">{sub}</div>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function formatUptime(seconds: number): string {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  if (days > 0) return `${days}d ${hours}h`;
+  const mins = Math.floor((seconds % 3600) / 60);
+  return `${hours}h ${mins}m`;
 }
