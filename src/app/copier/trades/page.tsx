@@ -380,14 +380,8 @@ function TargetTradeRow({
         </>
       ) : tgt.mirrorStatus === "synced" ? (
         <>
-          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold opacity-40 ${
-            expectedType === "BUY"
-              ? "bg-emerald-500/20 text-emerald-400"
-              : "bg-red-500/20 text-red-400"
-          }`}>
-            {expectedType}
-          </span>
-          <span className="text-xs text-zinc-500">Skipped (volume too small)</span>
+          <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-[10px]">SYNCED</Badge>
+          <span className="text-xs text-zinc-500">Position not found in snapshot</span>
         </>
       ) : (
         <Badge className="bg-zinc-700/50 text-zinc-500 border-zinc-600 text-[10px]">{tgt.mirrorStatus}</Badge>
