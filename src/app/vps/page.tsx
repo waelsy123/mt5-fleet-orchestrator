@@ -14,6 +14,14 @@ import {
 } from "@/components/ui/table";
 import { Plus } from "lucide-react";
 
+interface VpsStats {
+  cpuPercent: number | null;
+  memoryPercent: number | null;
+  memoryTotalMB: number | null;
+  memoryUsedMB: number | null;
+  mt5Processes: number | null;
+}
+
 interface Vps {
   id: string;
   name: string;
@@ -42,15 +50,34 @@ export default function VpsListPage() {
   const [vpsList, setVpsList] = useState<Vps[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [statsMap, setStatsMap] = useState<Record<string, VpsStats>>({});
 
   useEffect(() => {
     async function fetchVps() {
       try {
         const res = await fetch("/api/vps");
         if (!res.ok) throw new Error("Failed to fetch VPS list");
-        const json = await res.json();
+        const json: Vps[] = await res.json();
         setVpsList(json);
         setError(null);
+
+        // Fetch stats for each VPS in parallel
+        const statsEntries = await Promise.allSettled(
+          json.map(async (vps) => {
+            const statsRes = await fetch(`/api/vps/${vps.id}/stats`);
+            if (!statsRes.ok) return null;
+            const s = await statsRes.json();
+            return [vps.id, s] as [string, VpsStats];
+          })
+        );
+        const map: Record<string, VpsStats> = {};
+        for (const entry of statsEntries) {
+          if (entry.status === "fulfilled" && entry.value) {
+            const [id, s] = entry.value;
+            map[id] = s;
+          }
+        }
+        setStatsMap(map);
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Unknown error");
       } finally {
@@ -96,14 +123,16 @@ export default function VpsListPage() {
               <TableHead className="text-zinc-400">IP</TableHead>
               <TableHead className="text-zinc-400">Status</TableHead>
               <TableHead className="text-zinc-400">Accounts</TableHead>
-              <TableHead className="text-zinc-400">Last Seen</TableHead>
+              <TableHead className="text-zinc-400">CPU</TableHead>
+              <TableHead className="text-zinc-400">Memory</TableHead>
+              <TableHead className="text-zinc-400">MT5</TableHead>
               <TableHead className="text-zinc-400">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {vpsList.length === 0 ? (
               <TableRow className="border-zinc-700">
-                <TableCell colSpan={6} className="text-center text-zinc-500 py-8">
+                <TableCell colSpan={9} className="text-center text-zinc-500 py-8">
                   No VPS servers configured. Click &quot;Add VPS&quot; to get started.
                 </TableCell>
               </TableRow>
@@ -114,8 +143,18 @@ export default function VpsListPage() {
                   <TableCell className="text-zinc-300 font-mono text-sm">{vps.ip}</TableCell>
                   <TableCell>{statusBadge(vps.status)}</TableCell>
                   <TableCell className="text-zinc-300">{vps.accountCount}</TableCell>
-                  <TableCell className="text-zinc-400 text-sm">
-                    {vps.lastSeen ? new Date(vps.lastSeen).toLocaleString() : "Never"}
+                  <TableCell>
+                    <UsageBar value={statsMap[vps.id]?.cpuPercent} />
+                  </TableCell>
+                  <TableCell>
+                    <UsageBar value={statsMap[vps.id]?.memoryPercent} label={
+                      statsMap[vps.id]?.memoryUsedMB != null && statsMap[vps.id]?.memoryTotalMB != null
+                        ? `${(statsMap[vps.id].memoryUsedMB! / 1024).toFixed(1)}/${(statsMap[vps.id].memoryTotalMB! / 1024).toFixed(1)}G`
+                        : undefined
+                    } />
+                  </TableCell>
+                  <TableCell className="text-zinc-300 text-sm">
+                    {statsMap[vps.id]?.mt5Processes != null ? statsMap[vps.id].mt5Processes : "--"}
                   </TableCell>
                   <TableCell>
                     <Link href={`/vps/${vps.id}`}>
@@ -129,6 +168,25 @@ export default function VpsListPage() {
             )}
           </TableBody>
         </Table>
+      </div>
+    </div>
+  );
+}
+
+function UsageBar({ value, label }: { value?: number | null; label?: string }) {
+  if (value == null) return <span className="text-xs text-zinc-600">--</span>;
+  const color =
+    value >= 90 ? "bg-red-500" : value >= 70 ? "bg-yellow-500" : "bg-emerald-500";
+  const textColor =
+    value >= 90 ? "text-red-400" : value >= 70 ? "text-yellow-400" : "text-zinc-300";
+  return (
+    <div className="w-20">
+      <div className="flex items-center justify-between text-[11px] mb-0.5">
+        <span className={textColor}>{value}%</span>
+        {label && <span className="text-zinc-500">{label}</span>}
+      </div>
+      <div className="h-1 w-full rounded-full bg-zinc-800">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${Math.min(value, 100)}%` }} />
       </div>
     </div>
   );

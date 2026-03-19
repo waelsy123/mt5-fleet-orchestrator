@@ -6,6 +6,7 @@ import type {
   VpsDashboardAccount,
   VpsDashboardData,
   VpsPositions,
+  VpsSystemStats,
 } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -183,6 +184,10 @@ export class VpsClient {
         body: JSON.stringify(body),
       }
     );
+  }
+
+  async getSystemStats(): Promise<VpsSystemStats> {
+    return this.request<VpsSystemStats>("/system/stats");
   }
 
   async getCopierStatus(): Promise<unknown> {
