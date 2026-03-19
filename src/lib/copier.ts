@@ -559,6 +559,18 @@ class CopierSession {
     return { retried };
   }
 
+  getSourcePositionData(): Record<string, TrackedPosition> {
+    return { ...this.sourcePositions };
+  }
+
+  getMirrors(): Record<string, Record<string, MirrorState>> {
+    const result: Record<string, Record<string, MirrorState>> = {};
+    for (const [key, ts] of this.targetStates) {
+      result[key] = { ...ts.mirrors };
+    }
+    return result;
+  }
+
   status() {
     const targets = Array.from(this.targetStates.entries()).map(([key, ts]) => {
       const mirrors = Object.values(ts.mirrors);
@@ -682,6 +694,39 @@ class CopierManager {
     return Array.from(this.sessions.values()).map((s) => s.status());
   }
 
+  /** Returns info about sessions that use any account on this VPS */
+  getSessionsForVps(vpsId: string): { sessionId: string; role: string; login: string; server: string }[] {
+    const results: { sessionId: string; role: string; login: string; server: string }[] = [];
+    for (const [id, session] of this.sessions) {
+      if (!session.running) continue;
+      const src = session.getSourceInfo();
+      if (src && src.vpsId === vpsId) {
+        results.push({ sessionId: id, role: "source", login: src.login, server: src.server });
+      }
+      const status = session.status();
+      for (const t of status.targets) {
+        if (t.vpsId === vpsId) {
+          results.push({ sessionId: id, role: "target", login: t.login, server: t.server });
+        }
+      }
+    }
+    return results;
+  }
+
+  /** Returns info about sessions that use this specific account */
+  getSessionsForAccount(vpsId: string, server: string, login: string): { sessionId: string; role: string }[] {
+    const results: { sessionId: string; role: string }[] = [];
+    for (const [id, session] of this.sessions) {
+      if (!session.running) continue;
+      if (session.isSource(vpsId, server, login)) {
+        results.push({ sessionId: id, role: "source" });
+      } else if (session.isTarget(vpsId, server, login)) {
+        results.push({ sessionId: id, role: "target" });
+      }
+    }
+    return results;
+  }
+
   async restore(id: string, config: CopierConfig) {
     const session = new CopierSession(id);
     this.sessions.set(id, session);
@@ -701,6 +746,8 @@ export const copier = {
   getSourceInfo: (sessionId: string) => copierManager.getSourceInfo(sessionId),
   onAccountDeleted: (v: string, s: string, l: string) => copierManager.onAccountDeleted(v, s, l),
   onVpsDeleted: (v: string) => copierManager.onVpsDeleted(v),
+  getSessionsForVps: (vpsId: string) => copierManager.getSessionsForVps(vpsId),
+  getSessionsForAccount: (v: string, s: string, l: string) => copierManager.getSessionsForAccount(v, s, l),
 };
 
 export async function restoreCopierFromDb() {
