@@ -12,6 +12,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { toast } from "sonner";
+import { Trash2 } from "lucide-react";
 import { formatCurrency, formatProfit, profitColor } from "@/lib/format";
 
 interface AccountRow {
@@ -29,23 +31,51 @@ export default function AccountsPage() {
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  async function fetchAccounts() {
+    try {
+      const res = await fetch("/api/accounts");
+      if (!res.ok) throw new Error("Failed to fetch accounts");
+      const json = await res.json();
+      setAccounts(json);
+      setError(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    async function fetchAccounts() {
-      try {
-        const res = await fetch("/api/accounts");
-        if (!res.ok) throw new Error("Failed to fetch accounts");
-        const json = await res.json();
-        setAccounts(json);
-        setError(null);
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Unknown error");
-      } finally {
-        setLoading(false);
-      }
-    }
     fetchAccounts();
   }, []);
+
+  async function handleDelete(account: AccountRow) {
+    const confirmed = window.confirm(
+      `Delete account ${account.login}@${account.server} from ${account.vpsName}?\n\nThis will stop the MT5 terminal and delete all account files on the VPS.`
+    );
+    if (!confirmed) return;
+
+    const key = `${account.vpsId}-${account.server}-${account.login}`;
+    setDeleting(key);
+    try {
+      const res = await fetch(
+        `/api/accounts/${account.vpsId}/${encodeURIComponent(account.server)}/${account.login}`,
+        { method: "DELETE" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to delete (HTTP ${res.status})`);
+      }
+      toast.success(`Account ${account.login} deleted`);
+      fetchAccounts();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete account");
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   if (loading) {
     return (
@@ -110,11 +140,22 @@ export default function AccountsPage() {
                     )}
                   </TableCell>
                   <TableCell>
-                    <Link href={`/accounts/${account.vpsId}/${account.server}/${account.login}`}>
-                      <Button variant="ghost" size="sm" className="text-blue-500 hover:text-blue-400 hover:bg-blue-500/10">
-                        View
+                    <div className="flex items-center gap-1">
+                      <Link href={`/accounts/${account.vpsId}/${account.server}/${account.login}`}>
+                        <Button variant="ghost" size="sm" className="text-blue-500 hover:text-blue-400 hover:bg-blue-500/10">
+                          View
+                        </Button>
+                      </Link>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={deleting === `${account.vpsId}-${account.server}-${account.login}`}
+                        onClick={() => handleDelete(account)}
+                        className="text-red-500 hover:text-red-400 hover:bg-red-500/10"
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </Button>
-                    </Link>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
