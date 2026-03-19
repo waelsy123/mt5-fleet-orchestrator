@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { VpsClient } from "./vps-client";
+import { notifyTelegram } from "./notify";
 import type { AddAccountRequest } from "./types";
 
 // In-memory job tracker (fine for single instance on Railway)
@@ -138,6 +139,7 @@ async function runSetup(
     job.steps.push(`Failed: ${message}`);
     job.status = "failed";
     job.error = message;
+    notifyTelegram(`🚨 <b>Account Setup Failed</b>\n<code>${req.login}@${req.server}</code>\n${message}`);
 
     // Still try to register the account in DB (partial setup)
     try {
