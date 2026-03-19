@@ -43,7 +43,24 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    copier.onVpsDeleted(id);
+
+    // Check if any accounts on this VPS are used in active copier sessions
+    const activeSessions = copier.getSessionsForVps(id);
+    if (activeSessions.length > 0) {
+      const details = activeSessions.map((s) => {
+        const role = s.role === "source" ? "master" : "slave";
+        return `${s.login}@${s.server} is ${role} in ${s.sessionId}`;
+      });
+      return NextResponse.json(
+        {
+          error: "Cannot delete VPS — accounts are used in active copy trading sessions",
+          details,
+          sessions: [...new Set(activeSessions.map((s) => s.sessionId))],
+        },
+        { status: 409 }
+      );
+    }
+
     await prisma.vps.delete({ where: { id } });
     return NextResponse.json({ success: true });
   } catch (err) {

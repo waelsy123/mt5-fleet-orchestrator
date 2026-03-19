@@ -43,14 +43,30 @@ export async function DELETE(
 ) {
   try {
     const { vpsId, server, login } = await params;
+
+    // Check if this account is used in active copier sessions
+    const activeSessions = copier.getSessionsForAccount(vpsId, server, login);
+    if (activeSessions.length > 0) {
+      const details = activeSessions.map((s) => {
+        const role = s.role === "source" ? "master" : "slave";
+        return `${login}@${server} is ${role} in ${s.sessionId}`;
+      });
+      return NextResponse.json(
+        {
+          error: `Cannot delete account — ${login}@${server} is used in active copy trading`,
+          details,
+          sessions: activeSessions.map((s) => s.sessionId),
+        },
+        { status: 409 }
+      );
+    }
+
     const { client } = await getClient(vpsId);
     const result = await client.removeAccount(login);
 
     await prisma.account.delete({
       where: { vpsId_server_login: { vpsId, server, login } },
     });
-
-    copier.onAccountDeleted(vpsId, server, login);
 
     return NextResponse.json(result);
   } catch (err) {

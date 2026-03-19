@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import Link from "next/link";
 import {
   Play,
   Square,
@@ -23,6 +24,7 @@ import {
   AlertTriangle,
   X,
   Plus,
+  Eye,
 } from "lucide-react";
 
 interface AccountOption {
@@ -657,16 +659,25 @@ function SessionCard({
             <span>Positions: <span className="text-zinc-200">{session.sourcePositions}</span></span>
             <span>{session.summary.targetCount} target(s)</span>
             {session.running && (
-              <Button
-                size="sm"
-                onClick={handleStop}
-                disabled={submitting}
-                variant="ghost"
-                className="text-red-500 hover:text-red-400 hover:bg-red-500/10"
-              >
-                <Square className="mr-1 h-3 w-3" />
-                Stop
-              </Button>
+              <>
+                <Link
+                  href={`/copier/trades?sessionId=${encodeURIComponent(session.id)}`}
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 transition-colors"
+                >
+                  <Eye className="h-3 w-3" />
+                  Trades
+                </Link>
+                <Button
+                  size="sm"
+                  onClick={handleStop}
+                  disabled={submitting}
+                  variant="ghost"
+                  className="text-red-500 hover:text-red-400 hover:bg-red-500/10"
+                >
+                  <Square className="mr-1 h-3 w-3" />
+                  Stop
+                </Button>
+              </>
             )}
           </div>
         </div>
