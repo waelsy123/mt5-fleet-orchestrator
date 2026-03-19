@@ -1,5 +1,6 @@
 import { VpsClient } from "./vps-client";
 import { prisma } from "./prisma";
+import { notifyTelegram } from "./notify";
 
 interface TrackedPosition {
   symbol: string;
@@ -112,11 +113,19 @@ class CopierSession {
     this.id = id;
   }
 
+  private sourceLabel(): string {
+    if (!this.config) return "unknown";
+    return `${this.config.sourceLogin}@${this.config.sourceServer}`;
+  }
+
   private log(action: string, detail: string) {
     const entry = { time: now(), action, detail };
     this.globalLog.push(entry);
     if (this.globalLog.length > this.maxLog) {
       this.globalLog = this.globalLog.slice(-this.maxLog);
+    }
+    if (action === "ERROR" || action === "FAIL") {
+      notifyTelegram(`🚨 <b>Copier ${action}</b>\nSource: <code>${this.sourceLabel()}</code>\n${detail}`);
     }
     console.log(`[COPIER:${this.id}] ${action}: ${detail}`);
   }
@@ -126,6 +135,11 @@ class CopierSession {
     if (!ts) return;
     const entry = { time: now(), action, detail };
     ts.log.push(entry);
+    if (action === "ERROR" || action === "FAIL") {
+      notifyTelegram(
+        `🚨 <b>Copier ${action}</b>\nSource: <code>${this.sourceLabel()}</code>\nTarget: <code>${ts.account.login}@${ts.account.server}</code>\n${detail}`
+      );
+    }
     if (ts.log.length > this.maxLog) {
       ts.log = ts.log.slice(-this.maxLog);
     }
