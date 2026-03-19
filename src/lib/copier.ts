@@ -856,5 +856,6 @@ export async function restoreCopierFromDb() {
     }
   } catch (e) {
     console.error("[COPIER] Failed to restore sessions:", e);
+    notifyTelegram(`🚨 <b>Copier Session Restore Failed</b>\n${e instanceof Error ? e.message : String(e)}`);
   }
 }

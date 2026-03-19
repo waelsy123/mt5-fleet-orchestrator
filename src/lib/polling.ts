@@ -1,11 +1,16 @@
 import { prisma } from "./prisma";
 import { VpsClient } from "./vps-client";
+import { notifyTelegram } from "./notify";
 
 const POLL_INTERVAL_MS = 30_000;
 const SNAPSHOT_EVERY_N_TICKS = 10; // every 10 ticks = 5 minutes
 
 let running = false;
 let tickCount = 0;
+
+// Track previous state to only notify on transitions
+const prevVpsOnline = new Map<string, boolean>();
+const prevAccountConnected = new Map<string, boolean>();
 
 export function startPolling() {
   if (running) return;
@@ -97,12 +102,22 @@ async function pollSingleVps(
       where: { id: vps.id },
       data: { status: "ONLINE", lastSeen: new Date(), lastError: null },
     });
+    // Notify recovery
+    if (prevVpsOnline.get(vps.id) === false) {
+      notifyTelegram(`🟢 <b>VPS Back Online</b>\n<code>${vps.name}</code> (${vps.ip})`);
+    }
+    prevVpsOnline.set(vps.id, true);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await prisma.vps.update({
       where: { id: vps.id },
       data: { status: "OFFLINE", lastError: message },
     });
+    // Notify only on transition to offline
+    if (prevVpsOnline.get(vps.id) !== false) {
+      prevVpsOnline.set(vps.id, false);
+      notifyTelegram(`🔴 <b>VPS Offline</b>\n<code>${vps.name}</code> (${vps.ip})\n${message}`);
+    }
     return;
   }
 
@@ -142,6 +157,16 @@ async function pollSingleVps(
             lastSynced: new Date(),
           },
         });
+
+        // Notify on account disconnect/reconnect transitions
+        const acctKey = `${vps.id}|${acct.server}|${acct.login}`;
+        const wasConnected = prevAccountConnected.get(acctKey);
+        if (wasConnected === true && !acct.connected) {
+          notifyTelegram(`⚠️ <b>Account Disconnected</b>\n<code>${acct.login}@${acct.server}</code>\nVPS: ${vps.name}`);
+        } else if (wasConnected === false && acct.connected) {
+          notifyTelegram(`✅ <b>Account Reconnected</b>\n<code>${acct.login}@${acct.server}</code>\nVPS: ${vps.name}`);
+        }
+        prevAccountConnected.set(acctKey, acct.connected);
 
         if (shouldSnapshot) {
           await prisma.accountSnapshot.create({
