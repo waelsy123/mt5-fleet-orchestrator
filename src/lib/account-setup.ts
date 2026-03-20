@@ -30,12 +30,12 @@ export function getLatestJobForVps(vpsId: string): SetupJob | undefined {
   return latest;
 }
 
-export function startAccountSetup(
+export async function startAccountSetup(
   vpsId: string,
   ip: string,
   apiPort: number,
   req: AddAccountRequest & { broker?: string }
-): string {
+): Promise<string> {
   const jobId = `setup_${Date.now()}_${req.login}`;
   const job: SetupJob = {
     id: jobId,
@@ -46,6 +46,24 @@ export function startAccountSetup(
     steps: ["Starting account setup..."],
   };
   jobs.set(jobId, job);
+
+  // Create account in DB immediately as SETUP so it's visible in the UI
+  await prisma.account.upsert({
+    where: {
+      vpsId_server_login: { vpsId, server: req.server, login: req.login },
+    },
+    create: {
+      vpsId,
+      login: req.login,
+      server: req.server,
+      broker: req.broker ?? null,
+      status: "SETUP",
+    },
+    update: {
+      status: "SETUP",
+      broker: req.broker ?? undefined,
+    },
+  });
 
   // Run in background
   runSetup(job, ip, apiPort, req).catch((err) => {
@@ -93,8 +111,12 @@ async function runSetup(
 
     job.steps.push("");
 
-    // Save account to DB
-    await prisma.account.upsert({
+    const balance = parseFloat(result.account_info?.balance || "0");
+    const equity = parseFloat(result.account_info?.equity || "0");
+    const isActive = result.connected && balance > 0;
+
+    // Update account in DB — mark ACTIVE if connected with balance, keep SETUP otherwise
+    await prisma.account.update({
       where: {
         vpsId_server_login: {
           vpsId: job.vpsId,
@@ -102,20 +124,12 @@ async function runSetup(
           login: req.login,
         },
       },
-      create: {
-        vpsId: job.vpsId,
-        login: req.login,
-        server: req.server,
-        broker: req.broker ?? null,
-        connected: result.connected,
-        balance: parseFloat(result.account_info?.balance || "0"),
-        equity: parseFloat(result.account_info?.equity || "0"),
-      },
-      update: {
+      data: {
         broker: req.broker ?? undefined,
         connected: result.connected,
-        balance: parseFloat(result.account_info?.balance || "0"),
-        equity: parseFloat(result.account_info?.equity || "0"),
+        balance,
+        equity,
+        status: isActive ? "ACTIVE" : "SETUP",
       },
     });
 
@@ -141,9 +155,9 @@ async function runSetup(
     job.error = message;
     notifyTelegram(`🚨 <b>Account Setup Failed</b>\n<code>${req.login}@${req.server}</code>\n${message}`);
 
-    // Still try to register the account in DB (partial setup)
+    // Mark account as FAILED in DB
     try {
-      await prisma.account.upsert({
+      await prisma.account.update({
         where: {
           vpsId_server_login: {
             vpsId: job.vpsId,
@@ -151,16 +165,10 @@ async function runSetup(
             login: req.login,
           },
         },
-        create: {
-          vpsId: job.vpsId,
-          login: req.login,
-          server: req.server,
-          broker: req.broker ?? null,
-        },
-        update: {},
+        data: { status: "FAILED" },
       });
     } catch {
-      // ignore
+      // ignore — account may not exist if DB create failed earlier
     }
   }
 }

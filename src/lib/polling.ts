@@ -165,6 +165,8 @@ async function pollSingleVps(
             profit: acct.profit,
             connected: acct.connected,
             lastSynced: new Date(),
+            // Promote SETUP → ACTIVE once connected with balance
+            ...(acct.connected && acct.balance > 0 ? { status: "ACTIVE" } : {}),
           },
           create: {
             vpsId: vps.id,
@@ -177,6 +179,7 @@ async function pollSingleVps(
             profit: acct.profit,
             connected: acct.connected,
             lastSynced: new Date(),
+            status: acct.connected && acct.balance > 0 ? "ACTIVE" : "SETUP",
           },
         });
 

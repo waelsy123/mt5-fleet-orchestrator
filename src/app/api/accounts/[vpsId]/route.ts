@@ -31,7 +31,7 @@ export async function POST(
 
     const vps = await prisma.vps.findUniqueOrThrow({ where: { id: vpsId } });
 
-    const jobId = startAccountSetup(vps.id, vps.ip, vps.apiPort, {
+    const jobId = await startAccountSetup(vps.id, vps.ip, vps.apiPort, {
       login,
       password,
       server,

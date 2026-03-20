@@ -26,21 +26,22 @@ model Vps {
 }
 
 model Account {
-  id         String    @id @default(cuid())
+  id         String        @id @default(cuid())
   vpsId      String
   login      String
   server     String
   broker     String?
-  balance    Float     @default(0)
-  equity     Float     @default(0)
-  freeMargin Float     @default(0)
-  profit     Float     @default(0)
-  connected  Boolean   @default(false)
+  status     AccountStatus @default(ACTIVE)
+  balance    Float         @default(0)
+  equity     Float         @default(0)
+  freeMargin Float         @default(0)
+  profit     Float         @default(0)
+  connected  Boolean       @default(false)
   lastSynced DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
 
-  vps        Vps       @relation(fields: [vpsId], references: [id], onDelete: Cascade)
+  vps        Vps           @relation(fields: [vpsId], references: [id], onDelete: Cascade)
   snapshots  AccountSnapshot[]
 
   @@unique([vpsId, server, login])
@@ -82,6 +83,12 @@ enum VpsStatus {
 enum ProvisionStatus {
   RUNNING
   SUCCESS
+  FAILED
+}
+
+enum AccountStatus {
+  SETUP
+  ACTIVE
   FAILED
 }
 
