@@ -94,3 +94,15 @@ model CopierSession {
   targets        Json     @default("[]")
   updatedAt      DateTime @updatedAt
 }
+
+model CopierLog {
+  id        String   @id @default(cuid())
+  sessionId String
+  targetKey String?
+  action    String
+  detail    String
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([sessionId, targetKey, createdAt])
+}

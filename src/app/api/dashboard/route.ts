@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { copierManager } from "@/lib/copier";
 
 export async function GET() {
   try {
@@ -7,9 +8,12 @@ export async function GET() {
       include: {
         accounts: {
           select: {
+            login: true,
+            server: true,
             equity: true,
             balance: true,
             profit: true,
+            connected: true,
           },
         },
       },
@@ -22,6 +26,8 @@ export async function GET() {
     let totalBalance = 0;
     let totalProfit = 0;
 
+    const alerts: { type: string; message: string; vpsId?: string; vpsName?: string }[] = [];
+
     const vps = vpsList.map((v) => {
       const accountCount = v.accounts.length;
       const vpsEquity = v.accounts.reduce((sum, a) => sum + a.equity, 0);
@@ -32,6 +38,26 @@ export async function GET() {
       totalEquity += vpsEquity;
       totalBalance += vpsBalance;
       totalProfit += vpsProfit;
+
+      if (v.status === "OFFLINE" || v.status === "ERROR") {
+        alerts.push({
+          type: "vps_offline",
+          message: `${v.name} (${v.ip}) is ${v.status.toLowerCase()}${v.lastError ? `: ${v.lastError}` : ""}`,
+          vpsId: v.id,
+          vpsName: v.name,
+        });
+      }
+
+      for (const a of v.accounts) {
+        if (!a.connected && v.status === "ONLINE") {
+          alerts.push({
+            type: "account_disconnected",
+            message: `${a.login}@${a.server} on ${v.name} is disconnected`,
+            vpsId: v.id,
+            vpsName: v.name,
+          });
+        }
+      }
 
       return {
         id: v.id,
@@ -44,6 +70,14 @@ export async function GET() {
       };
     });
 
+    // Copier session summary
+    const copierSessions = copierManager.statusAll();
+    const activeSessions = copierSessions.filter((s) => s.running).length;
+    const activeTrades = copierSessions.reduce(
+      (sum, s) => sum + s.targets.reduce((ts, t) => ts + t.synced, 0),
+      0
+    );
+
     return NextResponse.json({
       totalVps,
       onlineVps,
@@ -51,6 +85,9 @@ export async function GET() {
       totalEquity,
       totalBalance,
       totalProfit,
+      activeSessions,
+      activeTrades,
+      alerts,
       vps,
     });
   } catch (err) {
