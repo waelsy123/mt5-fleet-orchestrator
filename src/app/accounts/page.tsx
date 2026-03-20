@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +32,7 @@ export default function AccountsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const router = useRouter();
 
   async function fetchAccounts() {
     try {
@@ -51,7 +52,8 @@ export default function AccountsPage() {
     fetchAccounts();
   }, []);
 
-  async function handleDelete(account: AccountRow) {
+  async function handleDelete(e: React.MouseEvent, account: AccountRow) {
+    e.stopPropagation();
     const confirmed = window.confirm(
       `Delete account ${account.login}@${account.server} from ${account.vpsName}?\n\nThis will stop the MT5 terminal and delete all account files on the VPS.`
     );
@@ -108,7 +110,7 @@ export default function AccountsPage() {
               <TableHead className="text-zinc-400">Equity</TableHead>
               <TableHead className="text-zinc-400">P&L</TableHead>
               <TableHead className="text-zinc-400">Status</TableHead>
-              <TableHead className="text-zinc-400">Actions</TableHead>
+              <TableHead className="text-zinc-400"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -119,46 +121,43 @@ export default function AccountsPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              accounts.map((account) => (
-                <TableRow
-                  key={`${account.vpsId}-${account.server}-${account.login}`}
-                  className="border-zinc-700 hover:bg-zinc-800/50"
-                >
-                  <TableCell className="text-zinc-200">{account.vpsName}</TableCell>
-                  <TableCell className="font-mono text-zinc-200">{account.login}</TableCell>
-                  <TableCell className="text-zinc-300">{account.server}</TableCell>
-                  <TableCell className="text-zinc-200">{formatCurrency(account.balance)}</TableCell>
-                  <TableCell className="text-zinc-200">{formatCurrency(account.equity)}</TableCell>
-                  <TableCell className={profitColor(account.profit)}>
-                    {formatProfit(account.profit)}
-                  </TableCell>
-                  <TableCell>
-                    {account.connected ? (
-                      <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30">Connected</Badge>
-                    ) : (
-                      <Badge className="bg-red-500/20 text-red-500 border-red-500/30">Disconnected</Badge>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1">
-                      <Link href={`/accounts/${account.vpsId}/${account.server}/${account.login}`}>
-                        <Button variant="ghost" size="sm" className="text-blue-500 hover:text-blue-400 hover:bg-blue-500/10">
-                          View
-                        </Button>
-                      </Link>
+              accounts.map((account) => {
+                const key = `${account.vpsId}-${account.server}-${account.login}`;
+                return (
+                  <TableRow
+                    key={key}
+                    className="border-zinc-700 hover:bg-zinc-800/50 cursor-pointer"
+                    onClick={() => router.push(`/accounts/${account.vpsId}/${account.server}/${account.login}`)}
+                  >
+                    <TableCell className="text-zinc-200">{account.vpsName}</TableCell>
+                    <TableCell className="font-mono text-zinc-200">{account.login}</TableCell>
+                    <TableCell className="text-zinc-300">{account.server}</TableCell>
+                    <TableCell className="text-zinc-200">{formatCurrency(account.balance)}</TableCell>
+                    <TableCell className="text-zinc-200">{formatCurrency(account.equity)}</TableCell>
+                    <TableCell className={profitColor(account.profit)}>
+                      {formatProfit(account.profit)}
+                    </TableCell>
+                    <TableCell>
+                      {account.connected ? (
+                        <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30">Connected</Badge>
+                      ) : (
+                        <Badge className="bg-red-500/20 text-red-500 border-red-500/30">Disconnected</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
                       <Button
                         variant="ghost"
                         size="sm"
-                        disabled={deleting === `${account.vpsId}-${account.server}-${account.login}`}
-                        onClick={() => handleDelete(account)}
+                        disabled={deleting === key}
+                        onClick={(e) => handleDelete(e, account)}
                         className="text-red-500 hover:text-red-400 hover:bg-red-500/10"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>

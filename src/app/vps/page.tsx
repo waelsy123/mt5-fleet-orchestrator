@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -51,6 +52,7 @@ export default function VpsListPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statsMap, setStatsMap] = useState<Record<string, VpsStats>>({});
+  const router = useRouter();
 
   useEffect(() => {
     async function fetchVps() {
@@ -126,19 +128,22 @@ export default function VpsListPage() {
               <TableHead className="text-zinc-400">CPU</TableHead>
               <TableHead className="text-zinc-400">Memory</TableHead>
               <TableHead className="text-zinc-400">MT5</TableHead>
-              <TableHead className="text-zinc-400">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {vpsList.length === 0 ? (
               <TableRow className="border-zinc-700">
-                <TableCell colSpan={9} className="text-center text-zinc-500 py-8">
+                <TableCell colSpan={7} className="text-center text-zinc-500 py-8">
                   No VPS servers configured. Click &quot;Add VPS&quot; to get started.
                 </TableCell>
               </TableRow>
             ) : (
               vpsList.map((vps) => (
-                <TableRow key={vps.id} className="border-zinc-700 hover:bg-zinc-800/50">
+                <TableRow
+                  key={vps.id}
+                  className="border-zinc-700 hover:bg-zinc-800/50 cursor-pointer"
+                  onClick={() => router.push(`/vps/${vps.id}`)}
+                >
                   <TableCell className="font-medium text-zinc-200">{vps.name}</TableCell>
                   <TableCell className="text-zinc-300 font-mono text-sm">{vps.ip}</TableCell>
                   <TableCell>{statusBadge(vps.status)}</TableCell>
@@ -155,13 +160,6 @@ export default function VpsListPage() {
                   </TableCell>
                   <TableCell className="text-zinc-300 text-sm">
                     {statsMap[vps.id]?.mt5Processes != null ? statsMap[vps.id].mt5Processes : "--"}
-                  </TableCell>
-                  <TableCell>
-                    <Link href={`/vps/${vps.id}`}>
-                      <Button variant="ghost" size="sm" className="text-blue-500 hover:text-blue-400 hover:bg-blue-500/10">
-                        View
-                      </Button>
-                    </Link>
                   </TableCell>
                 </TableRow>
               ))
