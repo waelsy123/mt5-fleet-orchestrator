@@ -4,20 +4,26 @@ import { copierManager } from "@/lib/copier";
 
 export async function GET() {
   try {
-    const vpsList = await prisma.vps.findMany({
-      include: {
-        accounts: {
-          select: {
-            login: true,
-            server: true,
-            equity: true,
-            balance: true,
-            profit: true,
-            connected: true,
+    const [vpsList, recentLogs] = await Promise.all([
+      prisma.vps.findMany({
+        include: {
+          accounts: {
+            select: {
+              login: true,
+              server: true,
+              equity: true,
+              balance: true,
+              profit: true,
+              connected: true,
+            },
           },
         },
-      },
-    });
+      }),
+      prisma.copierLog.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 15,
+      }),
+    ]);
 
     const totalVps = vpsList.length;
     const onlineVps = vpsList.filter((v) => v.status === "ONLINE").length;
@@ -26,7 +32,7 @@ export async function GET() {
     let totalBalance = 0;
     let totalProfit = 0;
 
-    const alerts: { type: string; message: string; vpsId?: string; vpsName?: string }[] = [];
+    const alerts: { type: string; message: string; vpsId?: string; vpsName?: string; login?: string; server?: string }[] = [];
 
     const vps = vpsList.map((v) => {
       const accountCount = v.accounts.length;
@@ -55,6 +61,8 @@ export async function GET() {
             message: `${a.login}@${a.server} on ${v.name} is disconnected`,
             vpsId: v.id,
             vpsName: v.name,
+            login: a.login,
+            server: a.server,
           });
         }
       }
@@ -77,6 +85,22 @@ export async function GET() {
       (sum, s) => sum + s.targets.reduce((ts, t) => ts + t.synced, 0),
       0
     );
+    const failedTrades = copierSessions.reduce(
+      (sum, s) => sum + s.targets.reduce((ts, t) => ts + t.failed, 0),
+      0
+    );
+
+    // Compact copier session info for the dashboard
+    const copierInfo = copierSessions
+      .filter((s) => s.running)
+      .map((s) => ({
+        id: s.id,
+        source: s.source,
+        targetCount: s.targets.length,
+        sourcePositions: s.sourcePositions,
+        synced: s.summary.synced,
+        failed: s.summary.failed,
+      }));
 
     return NextResponse.json({
       totalVps,
@@ -87,6 +111,9 @@ export async function GET() {
       totalProfit,
       activeSessions,
       activeTrades,
+      failedTrades,
+      copierInfo,
+      recentLogs,
       alerts,
       vps,
     });
