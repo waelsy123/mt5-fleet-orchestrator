@@ -25,6 +25,7 @@ import {
   X,
   Plus,
   Eye,
+  ScrollText,
 } from "lucide-react";
 
 interface AccountOption {
@@ -140,13 +141,22 @@ export default function CopierPage() {
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-zinc-100">Copy Trading</h1>
-        <Button
-          onClick={() => setShowNewForm(!showNewForm)}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white"
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          New Session
-        </Button>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/copier/logs"
+            className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+          >
+            <ScrollText className="h-4 w-4" />
+            History
+          </Link>
+          <Button
+            onClick={() => setShowNewForm(!showNewForm)}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            New Session
+          </Button>
+        </div>
       </div>
 
       {showNewForm && (

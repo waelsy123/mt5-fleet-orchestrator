@@ -8,6 +8,7 @@ import {
   Users,
   TrendingUp,
   Copy,
+  ScrollText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,7 @@ const navLinks = [
   { href: "/accounts", label: "Accounts", icon: Users },
   { href: "/trade", label: "Trade", icon: TrendingUp },
   { href: "/copier", label: "Copy Trading", icon: Copy },
+  { href: "/copier/logs", label: "Trade History", icon: ScrollText },
 ];
 
 export function Sidebar() {
@@ -32,10 +34,14 @@ export function Sidebar() {
       </div>
       <nav className="flex flex-1 flex-col gap-1 p-3">
         {navLinks.map((link) => {
+          // Find if a more specific sibling link matches first
+          const moreSpecificMatch = navLinks.some(
+            (other) => other.href !== link.href && other.href.startsWith(link.href + "/") && (pathname === other.href || pathname.startsWith(other.href + "/"))
+          );
           const isActive =
             link.href === "/"
               ? pathname === "/"
-              : pathname.startsWith(link.href);
+              : !moreSpecificMatch && (pathname === link.href || pathname.startsWith(link.href + "/"));
           return (
             <Link
               key={link.href}

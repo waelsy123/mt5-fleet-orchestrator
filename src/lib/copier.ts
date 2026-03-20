@@ -128,6 +128,7 @@ class CopierSession {
       notifyTelegram(`🚨 <b>Copier ${action}</b>\nSource: <code>${this.sourceLabel()}</code>\n${detail}`);
     }
     console.log(`[COPIER:${this.id}] ${action}: ${detail}`);
+    prisma.copierLog.create({ data: { sessionId: this.id, action, detail } }).catch(() => {});
   }
 
   private addTargetLog(key: string, action: string, detail: string) {
@@ -143,6 +144,7 @@ class CopierSession {
     if (ts.log.length > this.maxLog) {
       ts.log = ts.log.slice(-this.maxLog);
     }
+    prisma.copierLog.create({ data: { sessionId: this.id, targetKey: key, action, detail } }).catch(() => {});
   }
 
   isSource(vpsId: string, server: string, login: string): boolean {
