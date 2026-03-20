@@ -113,40 +113,7 @@ The `python/` directory contains scripts deployed to each Windows VPS:
 
 ## Development
 
-All development status, roadmap, and planning is tracked in [`ROADMAP.md`](./ROADMAP.md).
-
-The roadmap includes:
-- Full project architecture (orchestrator + per-VPS agent)
-- Database models and key modules
-- Phased development plan (reliability, security, performance, operations, code quality)
-
-### Project Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│  mt5-fleet-orchestrator (Railway)            │
-│  Next.js 16 + PostgreSQL + React Dashboard   │
-│  Central management of all VPS instances      │
-│                                              │
-│  - Web UI (VPS fleet, accounts, trading)     │
-│  - Copy trading engine (multi-session)       │
-│  - Background polling of all VPS             │
-│  - Account snapshots & history charts        │
-│  - Telegram notifications                    │
-│  - VPS provisioning (VNC/SSH automation)     │
-│  - OpenAPI docs at /docs                     │
-└──────────┬───────────┬───────────┬───────────┘
-           │ HTTP :8000 │           │
-     ┌─────▼──┐   ┌────▼───┐  ┌───▼────┐
-     │ VPS 1  │   │ VPS 2  │  │ VPS N  │
-     │        │   │        │  │        │
-     │  mt5-instance-account-api (FastAPI)     │
-     │  Per-VPS agent managing MT5 terminals   │
-     │  - Account install & setup              │
-     │  - Trade execution via EA bridge        │
-     │  - System stats (CPU, mem, disk)        │
-     └────────────────────────────────────────┘
-```
+All development status, architecture details, and planning is tracked in [`ROADMAP.md`](./ROADMAP.md).
 
 ## Key Design Decisions
 
