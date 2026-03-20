@@ -9,6 +9,7 @@ import {
   TrendingUp,
   Copy,
   ScrollText,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,7 @@ const navLinks = [
   { href: "/trade", label: "Trade", icon: TrendingUp },
   { href: "/copier", label: "Copy Trading", icon: Copy },
   { href: "/copier/logs", label: "Trade History", icon: ScrollText },
+  { href: "/docs", label: "API Docs", icon: FileText },
 ];
 
 export function Sidebar() {

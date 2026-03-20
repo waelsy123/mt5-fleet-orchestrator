@@ -5,8 +5,14 @@ const AUTH_COOKIE = "mt5_auth";
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow login page and login API
-  if (pathname === "/login" || pathname === "/api/auth/login") {
+  // Allow public pages: login, docs, health
+  if (
+    pathname === "/login" ||
+    pathname === "/api/auth/login" ||
+    pathname === "/api/health" ||
+    pathname === "/docs" ||
+    pathname === "/api/docs"
+  ) {
     return NextResponse.next();
   }
 
