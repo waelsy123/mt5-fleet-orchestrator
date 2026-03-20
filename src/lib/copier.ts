@@ -20,6 +20,7 @@ interface MirrorState {
   status: MirrorStatus;
   error?: string;
   targetTicket?: number; // position ticket on the target account
+  failedAt?: number; // timestamp of last failure — used for auto-retry cooldown
 }
 
 export type CopyMode = "follow" | "opposite";
@@ -56,15 +57,18 @@ function now() {
   return new Date().toTimeString().slice(0, 8);
 }
 
-// Shared VpsClient cache across all sessions
-const clientCache: Map<string, VpsClient> = new Map();
+// Shared VpsClient cache across all sessions (5 min TTL)
+const CLIENT_CACHE_TTL_MS = 5 * 60 * 1000;
+const clientCache: Map<string, { client: VpsClient; cachedAt: number }> = new Map();
 
 async function getClient(vpsId: string): Promise<VpsClient> {
   const cached = clientCache.get(vpsId);
-  if (cached) return cached;
+  if (cached && Date.now() - cached.cachedAt < CLIENT_CACHE_TTL_MS) {
+    return cached.client;
+  }
   const vps = await prisma.vps.findUniqueOrThrow({ where: { id: vpsId } });
   const client = new VpsClient({ ip: vps.ip, apiPort: vps.apiPort });
-  clientCache.set(vpsId, client);
+  clientCache.set(vpsId, { client, cachedAt: Date.now() });
   return client;
 }
 
@@ -208,7 +212,7 @@ class CopierSession {
       if (!this.running || this.polling) return;
       this.polling = true;
       this.poll().finally(() => { this.polling = false; });
-    }, 2000);
+    }, 1000);
   }
 
   /** Count active copied positions across all targets. */
@@ -412,6 +416,30 @@ class CopierSession {
       );
       await Promise.allSettled(promises);
     }
+
+    // Auto-retry failed trades after 30s cooldown
+    await this.autoRetryFailed();
+  }
+
+  private async autoRetryFailed() {
+    const cooldownMs = 30_000;
+    const currentTime = Date.now();
+
+    for (const [key, ts] of this.targetStates) {
+      for (const [ticket, mirror] of Object.entries(ts.mirrors)) {
+        if (mirror.status !== "failed") continue;
+        if (!mirror.failedAt || currentTime - mirror.failedAt < cooldownMs) continue;
+
+        const pos = this.sourcePositions[ticket];
+        if (!pos) continue; // source position closed — no point retrying
+
+        const volume = Math.floor(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
+        if (volume < 0.01) continue;
+
+        this.addTargetLog(key, "RETRY", `Auto-retrying ${pos.symbol} #${ticket}`);
+        await this.copyToTarget(key, ts, ticket, pos, volume);
+      }
+    }
   }
 
   private resolveTradeType(srcType: string, mode: CopyMode): string {
@@ -437,13 +465,13 @@ class CopierSession {
         this.addTargetLog(key, "COPIED", `${tradeType} ${volume} ${pos.symbol} @ ${r.price ?? "?"} — Deal #${r.deal ?? "?"} ticket #${orderNum ?? "?"} [${ts.mode}]`);
       } else {
         const err = r?.message ?? r?.raw ?? JSON.stringify(result);
-        ts.mirrors[ticket] = { status: "failed", error: err };
+        ts.mirrors[ticket] = { status: "failed", error: err, failedAt: Date.now() };
         ts.lastError = err;
         this.addTargetLog(key, "FAIL", `${tradeType} ${volume} ${pos.symbol}: ${err}`);
       }
     } catch (e) {
       const err = String(e);
-      ts.mirrors[ticket] = { status: "failed", error: err };
+      ts.mirrors[ticket] = { status: "failed", error: err, failedAt: Date.now() };
       ts.lastError = err;
       this.addTargetLog(key, "ERROR", `Copy failed: ${err}`);
     }
@@ -700,15 +728,12 @@ class CopierManager {
     return { sessionId: id };
   }
 
-  stopSession(sessionId: string, closePositions = false) {
+  async stopSession(sessionId: string, closePositions = false) {
     const session = this.sessions.get(sessionId);
     if (!session) return { error: "Session not found" };
 
     if (closePositions) {
-      // Close all copied positions then stop — async but we delete from map immediately
-      session.stopAndClose().then(() => {
-        // already persisted inside stopAndClose
-      });
+      await session.stopAndClose();
     } else {
       session.stop();
     }

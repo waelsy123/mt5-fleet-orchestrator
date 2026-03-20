@@ -2,22 +2,28 @@ import { prisma } from "./prisma";
 import { VpsClient } from "./vps-client";
 import { notifyTelegram } from "./notify";
 
-const POLL_INTERVAL_MS = 30_000;
-const SNAPSHOT_EVERY_N_TICKS = 10; // every 10 ticks = 5 minutes
+const POLL_INTERVAL_MS = 10_000;
+const SNAPSHOT_EVERY_N_TICKS = 30; // every 30 ticks = 5 minutes
+const BACKOFF_AFTER_FAILURES = 3; // back off after 3 consecutive failures
+const BACKOFF_EVERY_N_TICKS = 6; // when backed off, poll every 6th tick (60s)
 
 let running = false;
 let tickCount = 0;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // Track previous state to only notify on transitions
 const prevVpsOnline = new Map<string, boolean>();
 const prevAccountConnected = new Map<string, boolean>();
 
+// Track consecutive poll failures per VPS for health-aware backoff
+const consecutiveFailures = new Map<string, number>();
+
 export function startPolling() {
   if (running) return;
   running = true;
-  console.log("[polling] Started background polling every 30s");
+  console.log("[polling] Started background polling every 10s");
 
-  setInterval(async () => {
+  pollTimer = setInterval(async () => {
     if (!running) return;
     await pollAll();
   }, POLL_INTERVAL_MS);
@@ -25,6 +31,10 @@ export function startPolling() {
 
 export function stopPolling() {
   running = false;
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
 }
 
 async function pollAll() {
@@ -71,6 +81,12 @@ async function pollSingleVps(
   },
   shouldSnapshot: boolean
 ) {
+  // Health-aware backoff: skip this tick if VPS has failed too many times
+  const failures = consecutiveFailures.get(vps.id) ?? 0;
+  if (failures >= BACKOFF_AFTER_FAILURES && tickCount % BACKOFF_EVERY_N_TICKS !== 0) {
+    return; // backed off — only poll every 60s
+  }
+
   const client = new VpsClient({ ip: vps.ip, apiPort: vps.apiPort });
 
   // Step 1: Ping via /accounts (fast, no EA calls)
@@ -102,6 +118,7 @@ async function pollSingleVps(
       where: { id: vps.id },
       data: { status: "ONLINE", lastSeen: new Date(), lastError: null },
     });
+    consecutiveFailures.set(vps.id, 0);
     // Notify recovery
     if (prevVpsOnline.get(vps.id) === false) {
       notifyTelegram(`🟢 <b>VPS Back Online</b>\n<code>${vps.name}</code> (${vps.ip})`);
@@ -109,6 +126,8 @@ async function pollSingleVps(
     prevVpsOnline.set(vps.id, true);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const newFailures = (consecutiveFailures.get(vps.id) ?? 0) + 1;
+    consecutiveFailures.set(vps.id, newFailures);
     await prisma.vps.update({
       where: { id: vps.id },
       data: { status: "OFFLINE", lastError: message },
@@ -117,6 +136,9 @@ async function pollSingleVps(
     if (prevVpsOnline.get(vps.id) !== false) {
       prevVpsOnline.set(vps.id, false);
       notifyTelegram(`🔴 <b>VPS Offline</b>\n<code>${vps.name}</code> (${vps.ip})\n${message}`);
+    }
+    if (newFailures === BACKOFF_AFTER_FAILURES) {
+      console.log(`[polling] ${vps.name}: ${newFailures} consecutive failures, backing off to every 60s`);
     }
     return;
   }
