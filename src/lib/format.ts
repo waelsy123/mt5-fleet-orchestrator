@@ -3,7 +3,7 @@ export function formatCurrency(value: number): string {
 }
 
 export function formatProfit(value: number): string {
-  const sign = value >= 0 ? "+" : "";
+  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
   return sign + "$" + Math.abs(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
