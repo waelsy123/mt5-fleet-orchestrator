@@ -10,6 +10,8 @@ import type {
 } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 5000;
+const DEFAULT_RETRIES = 2; // 3 total attempts
+const RETRY_BASE_MS = 1000; // 1s, 2s backoff
 
 export class VpsClient {
   private baseUrl: string;
@@ -21,30 +23,49 @@ export class VpsClient {
   private async request<T = unknown>(
     path: string,
     options: RequestInit = {},
-    timeoutMs: number = DEFAULT_TIMEOUT_MS
+    timeoutMs: number = DEFAULT_TIMEOUT_MS,
+    retries: number = DEFAULT_RETRIES
   ): Promise<T> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let lastError: unknown;
 
-    try {
-      const res = await fetch(`${this.baseUrl}${path}`, {
-        ...options,
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          ...options.headers,
-        },
-      });
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status}: ${text}`);
+      try {
+        const res = await fetch(`${this.baseUrl}${path}`, {
+          ...options,
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            ...options.headers,
+          },
+        });
+
+        clearTimeout(timer);
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(`HTTP ${res.status}: ${text}`);
+        }
+
+        return (await res.json()) as T;
+      } catch (err) {
+        clearTimeout(timer);
+        lastError = err;
+
+        // Don't retry on HTTP errors (4xx/5xx) — only on network/timeout errors
+        if (err instanceof Error && err.message.startsWith("HTTP ")) throw err;
+
+        // Don't retry on the last attempt
+        if (attempt < retries) {
+          const delay = RETRY_BASE_MS * Math.pow(2, attempt);
+          await new Promise((r) => setTimeout(r, delay));
+        }
       }
-
-      return (await res.json()) as T;
-    } finally {
-      clearTimeout(timer);
     }
+
+    throw lastError;
   }
 
   async ping(): Promise<boolean> {
@@ -71,7 +92,7 @@ export class VpsClient {
           positions: { status: string; positions?: unknown[] };
         }
       >
-    >("/dashboard/data", {}, 60_000);
+    >("/dashboard/data", {}, 60_000, 0); // no retries — slow EA call
 
     const accounts: VpsDashboardAccount[] = Object.values(raw).map((acct) => ({
       login: acct.login,
@@ -100,7 +121,7 @@ export class VpsClient {
     return this.request("/accounts/add", {
       method: "POST",
       body: JSON.stringify(req),
-    }, 300_000); // 5 min — downloads + installs MT5
+    }, 300_000, 0); // 5 min — downloads + installs MT5, no retries
   }
 
   async removeAccount(login: string): Promise<unknown> {
@@ -131,12 +152,11 @@ export class VpsClient {
     login: string,
     trade: TradeRequest
   ): Promise<unknown> {
+    // No retries — retrying a trade could open duplicate positions
     return this.request(
       `/accounts/${encodeURIComponent(server)}/${login}/buy`,
-      {
-        method: "POST",
-        body: JSON.stringify(trade),
-      }
+      { method: "POST", body: JSON.stringify(trade) },
+      DEFAULT_TIMEOUT_MS, 0
     );
   }
 
@@ -147,10 +167,8 @@ export class VpsClient {
   ): Promise<unknown> {
     return this.request(
       `/accounts/${encodeURIComponent(server)}/${login}/sell`,
-      {
-        method: "POST",
-        body: JSON.stringify(trade),
-      }
+      { method: "POST", body: JSON.stringify(trade) },
+      DEFAULT_TIMEOUT_MS, 0
     );
   }
 
@@ -162,10 +180,8 @@ export class VpsClient {
     const body = symbol ? JSON.stringify({ symbol }) : undefined;
     return this.request(
       `/accounts/${encodeURIComponent(server)}/${login}/close`,
-      {
-        method: "POST",
-        body,
-      }
+      { method: "POST", body },
+      DEFAULT_TIMEOUT_MS, 0
     );
   }
 
@@ -179,10 +195,8 @@ export class VpsClient {
     if (volume !== undefined) body.volume = volume;
     return this.request(
       `/accounts/${encodeURIComponent(server)}/${login}/close-ticket`,
-      {
-        method: "POST",
-        body: JSON.stringify(body),
-      }
+      { method: "POST", body: JSON.stringify(body) },
+      DEFAULT_TIMEOUT_MS, 0
     );
   }
 
@@ -198,13 +212,13 @@ export class VpsClient {
     return this.request("/copier/start", {
       method: "POST",
       body: JSON.stringify(req),
-    });
+    }, DEFAULT_TIMEOUT_MS, 0); // no retries — could start duplicate sessions
   }
 
   async stopCopier(): Promise<unknown> {
     return this.request("/copier/stop", {
       method: "POST",
-    });
+    }, DEFAULT_TIMEOUT_MS, 0);
   }
 
   async getBrokers(): Promise<unknown> {

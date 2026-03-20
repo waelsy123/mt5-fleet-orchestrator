@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const result = copierManager.stopSession(sessionId, !!force);
+    const result = await copierManager.stopSession(sessionId, !!force);
     if ("error" in result) {
       return NextResponse.json({ error: result.error }, { status: 400 });
     }
