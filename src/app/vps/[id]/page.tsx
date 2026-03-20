@@ -30,6 +30,7 @@ import { formatCurrency, formatProfit, profitColor } from "@/lib/format";
 interface Account {
   login: string;
   server: string;
+  status: "SETUP" | "ACTIVE" | "FAILED";
   balance: number;
   equity: number;
   profit: number;
@@ -593,7 +594,11 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
                     <TableCell className={profitColor(account.profit)}>{formatProfit(account.profit)}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5">
-                        {account.connected ? (
+                        {account.status === "SETUP" ? (
+                          <Badge className="bg-yellow-500/20 text-yellow-500 border-yellow-500/30">Setting up...</Badge>
+                        ) : account.status === "FAILED" ? (
+                          <Badge className="bg-red-500/20 text-red-500 border-red-500/30">Setup Failed</Badge>
+                        ) : account.connected ? (
                           <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30">Connected</Badge>
                         ) : (
                           <Badge className="bg-red-500/20 text-red-500 border-red-500/30">Disconnected</Badge>
