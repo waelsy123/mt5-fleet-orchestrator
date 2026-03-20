@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState, use, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,16 @@ import {
 } from "@/components/ui/table";
 import { toast } from "sonner";
 import { formatCurrency, formatProfit, profitColor } from "@/lib/format";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  Legend,
+} from "recharts";
 
 interface AccountInfo {
   login: string;
@@ -38,6 +48,14 @@ interface Position {
   tp: number;
 }
 
+interface Snapshot {
+  balance: number;
+  equity: number;
+  profit: number;
+  positions: number;
+  timestamp: string;
+}
+
 export default function AccountDetailPage({
   params,
 }: {
@@ -48,9 +66,22 @@ export default function AccountDetailPage({
 
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [chartHours, setChartHours] = useState(24);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [closingTicket, setClosingTicket] = useState<string | null>(null);
+
+  const fetchSnapshots = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/accounts/${vpsId}/${encodeURIComponent(decodedServer)}/${login}/snapshots?hours=${chartHours}`
+      );
+      if (res.ok) setSnapshots(await res.json());
+    } catch {
+      // non-critical
+    }
+  }, [vpsId, decodedServer, login, chartHours]);
 
   async function fetchData() {
     try {
@@ -76,10 +107,15 @@ export default function AccountDetailPage({
 
   useEffect(() => {
     fetchData();
+    fetchSnapshots();
     const interval = setInterval(fetchData, 10000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vpsId, server, login]);
+
+  useEffect(() => {
+    fetchSnapshots();
+  }, [fetchSnapshots]);
 
   async function handleClose(symbol: string, ticket: string) {
     setClosingTicket(ticket);
@@ -163,6 +199,97 @@ export default function AccountDetailPage({
           </Card>
         ))}
       </div>
+
+      {/* Balance/Equity Chart */}
+      <Card className="border-zinc-700 bg-zinc-900">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-zinc-100">Balance &amp; Equity History</CardTitle>
+          <div className="flex gap-1">
+            {[6, 24, 48, 168].map((h) => (
+              <Button
+                key={h}
+                size="sm"
+                variant={chartHours === h ? "default" : "ghost"}
+                className={
+                  chartHours === h
+                    ? "bg-blue-600 hover:bg-blue-700 text-white h-7 text-xs"
+                    : "text-zinc-400 hover:text-zinc-100 h-7 text-xs"
+                }
+                onClick={() => setChartHours(h)}
+              >
+                {h <= 24 ? `${h}h` : `${h / 24}d`}
+              </Button>
+            ))}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {snapshots.length < 2 ? (
+            <p className="text-center text-zinc-500 py-8 text-sm">
+              Not enough data yet. Snapshots are collected every 5 minutes.
+            </p>
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart
+                data={snapshots.map((s) => ({
+                  time: new Date(s.timestamp).getTime(),
+                  balance: s.balance,
+                  equity: s.equity,
+                }))}
+                margin={{ top: 5, right: 20, bottom: 5, left: 10 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                <XAxis
+                  dataKey="time"
+                  type="number"
+                  domain={["dataMin", "dataMax"]}
+                  tickFormatter={(ts: number) => {
+                    const d = new Date(ts);
+                    return chartHours <= 24
+                      ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                      : d.toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+                  }}
+                  stroke="#666"
+                  tick={{ fill: "#999", fontSize: 11 }}
+                />
+                <YAxis
+                  stroke="#666"
+                  tick={{ fill: "#999", fontSize: 11 }}
+                  tickFormatter={(v: number) => `$${v.toLocaleString()}`}
+                  domain={["auto", "auto"]}
+                />
+                <Tooltip
+                  contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 8 }}
+                  labelStyle={{ color: "#999" }}
+                  labelFormatter={(ts) => new Date(Number(ts)).toLocaleString()}
+                  formatter={(value, name) => [
+                    `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                    String(name).charAt(0).toUpperCase() + String(name).slice(1),
+                  ]}
+                />
+                <Legend
+                  wrapperStyle={{ color: "#999", fontSize: 12 }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="balance"
+                  stroke="#60a5fa"
+                  strokeWidth={2}
+                  dot={false}
+                  name="Balance"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="equity"
+                  stroke="#4ade80"
+                  strokeWidth={2}
+                  dot={false}
+                  name="Equity"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="border-zinc-700 bg-zinc-900">
         <CardHeader>

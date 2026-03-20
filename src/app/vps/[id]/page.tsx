@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Plus, Trash2, Play, RefreshCw, Loader2, CheckCircle2, XCircle, Cpu, HardDrive, MemoryStick, Monitor } from "lucide-react";
+import { Plus, Trash2, Play, RefreshCw, Loader2, CheckCircle2, XCircle, Cpu, HardDrive, MemoryStick, Monitor, Copy } from "lucide-react";
 import { formatCurrency, formatProfit, profitColor } from "@/lib/format";
 
 interface Account {
@@ -99,6 +99,16 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
   const [setupSteps, setSetupSteps] = useState<string[]>([]);
   const [setupStatus, setSetupStatus] = useState<"idle" | "running" | "success" | "failed">("idle");
   const [stats, setStats] = useState<SystemStats | null>(null);
+  const [copierInfo, setCopierInfo] = useState<{ sessionId: string; role: string; login: string; server: string }[]>([]);
+
+  async function fetchCopierInfo() {
+    try {
+      const res = await fetch(`/api/vps/${id}/copier-info`);
+      if (res.ok) setCopierInfo(await res.json());
+    } catch {
+      // non-critical
+    }
+  }
 
   async function fetchStats() {
     try {
@@ -126,6 +136,7 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
   useEffect(() => {
     fetchVps();
     fetchStats();
+    fetchCopierInfo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -565,19 +576,42 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
                   </TableCell>
                 </TableRow>
               ) : (
-                vps.accounts.map((account) => (
-                  <TableRow key={`${account.server}-${account.login}`} className="border-zinc-700 hover:bg-zinc-800/50">
+                vps.accounts.map((account) => {
+                  const roles = copierInfo.filter(
+                    (c) => c.login === account.login && c.server === account.server
+                  );
+                  return (
+                  <TableRow
+                    key={`${account.server}-${account.login}`}
+                    className="border-zinc-700 hover:bg-zinc-800/50 cursor-pointer"
+                    onClick={() => router.push(`/accounts/${id}/${account.server}/${account.login}`)}
+                  >
                     <TableCell className="font-mono text-zinc-200">{account.login}</TableCell>
                     <TableCell className="text-zinc-300">{account.server}</TableCell>
                     <TableCell className="text-zinc-200">{formatCurrency(account.balance)}</TableCell>
                     <TableCell className="text-zinc-200">{formatCurrency(account.equity)}</TableCell>
                     <TableCell className={profitColor(account.profit)}>{formatProfit(account.profit)}</TableCell>
                     <TableCell>
-                      {account.connected ? (
-                        <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30">Connected</Badge>
-                      ) : (
-                        <Badge className="bg-red-500/20 text-red-500 border-red-500/30">Disconnected</Badge>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {account.connected ? (
+                          <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30">Connected</Badge>
+                        ) : (
+                          <Badge className="bg-red-500/20 text-red-500 border-red-500/30">Disconnected</Badge>
+                        )}
+                        {roles.map((r) => (
+                          <Badge
+                            key={r.sessionId + r.role}
+                            className={
+                              r.role === "source"
+                                ? "bg-purple-500/20 text-purple-400 border-purple-500/30"
+                                : "bg-amber-500/20 text-amber-400 border-amber-500/30"
+                            }
+                          >
+                            <Copy className="h-3 w-3 mr-1" />
+                            {r.role === "source" ? "Source" : "Target"}
+                          </Badge>
+                        ))}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Link href={`/accounts/${id}/${account.server}/${account.login}`}>
@@ -587,7 +621,8 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
                       </Link>
                     </TableCell>
                   </TableRow>
-                ))
+                  );
+                })
               )}
             </TableBody>
           </Table>
