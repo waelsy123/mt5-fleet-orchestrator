@@ -6,8 +6,8 @@ const POLL_INTERVAL_MS = 10_000;
 const SNAPSHOT_EVERY_N_TICKS = 30; // every 30 ticks = 5 minutes
 const BACKOFF_AFTER_FAILURES = 3; // back off after 3 consecutive failures
 const BACKOFF_EVERY_N_TICKS = 6; // when backed off, poll every 6th tick (60s)
-const SNAPSHOT_RETENTION_DAYS = 30;
-const CLEANUP_EVERY_N_TICKS = 360; // every 360 ticks = ~1 hour
+const SNAPSHOT_RETENTION_DAYS = 60;
+const CLEANUP_EVERY_N_TICKS = 8640; // every 8640 ticks = ~24 hours
 
 let running = false;
 let tickCount = 0;
