@@ -10,6 +10,7 @@ import {
   Users,
   DollarSign,
   TrendingUp,
+  TrendingDown,
   Copy,
   AlertTriangle,
   XCircle,
@@ -227,7 +228,11 @@ export default function DashboardPage() {
             <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Total Equity</p>
             <p className="mt-2 text-3xl font-bold text-zinc-100">{formatCurrency(data.totalEquity)}</p>
             <div className="mt-2 flex items-center gap-1.5">
-              <TrendingUp className={`h-3.5 w-3.5 ${data.totalProfit >= 0 ? "text-emerald-500" : "text-red-500"}`} />
+              {data.totalProfit >= 0 ? (
+                <TrendingUp className="h-3.5 w-3.5 text-emerald-500" />
+              ) : (
+                <TrendingDown className="h-3.5 w-3.5 text-red-500" />
+              )}
               <span className={`text-sm font-medium ${profitColor(data.totalProfit)}`}>
                 {formatProfit(data.totalProfit)}
               </span>

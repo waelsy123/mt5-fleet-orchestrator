@@ -138,6 +138,12 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
     fetchVps();
     fetchStats();
     fetchCopierInfo();
+    const interval = setInterval(() => {
+      fetchVps();
+      fetchStats();
+      fetchCopierInfo();
+    }, 30_000);
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 

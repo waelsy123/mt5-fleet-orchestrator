@@ -6,6 +6,8 @@ const POLL_INTERVAL_MS = 10_000;
 const SNAPSHOT_EVERY_N_TICKS = 30; // every 30 ticks = 5 minutes
 const BACKOFF_AFTER_FAILURES = 3; // back off after 3 consecutive failures
 const BACKOFF_EVERY_N_TICKS = 6; // when backed off, poll every 6th tick (60s)
+const SNAPSHOT_RETENTION_DAYS = 30;
+const CLEANUP_EVERY_N_TICKS = 360; // every 360 ticks = ~1 hour
 
 let running = false;
 let tickCount = 0;
@@ -41,6 +43,11 @@ async function pollAll() {
   tickCount++;
   const shouldSnapshot = tickCount % SNAPSHOT_EVERY_N_TICKS === 0;
 
+  // Cleanup old snapshots every ~1 hour
+  if (tickCount % CLEANUP_EVERY_N_TICKS === 0) {
+    cleanupOldSnapshots();
+  }
+
   let vpsList;
   try {
     vpsList = await prisma.vps.findMany({
@@ -68,6 +75,20 @@ async function pollAll() {
         result.reason
       );
     }
+  }
+}
+
+async function cleanupOldSnapshots() {
+  try {
+    const cutoff = new Date(Date.now() - SNAPSHOT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    const { count } = await prisma.accountSnapshot.deleteMany({
+      where: { timestamp: { lt: cutoff } },
+    });
+    if (count > 0) {
+      console.log(`[polling] Cleaned up ${count} snapshots older than ${SNAPSHOT_RETENTION_DAYS} days`);
+    }
+  } catch (err) {
+    console.error("[polling] Snapshot cleanup failed:", err);
   }
 }
 
