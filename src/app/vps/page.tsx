@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -13,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 
 interface VpsStats {
   cpuPercent: number | null;
@@ -52,7 +53,19 @@ export default function VpsListPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statsMap, setStatsMap] = useState<Record<string, VpsStats>>({});
+  const [search, setSearch] = useState("");
   const router = useRouter();
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return vpsList;
+    const q = search.toLowerCase();
+    return vpsList.filter(
+      (v) =>
+        v.name.toLowerCase().includes(q) ||
+        v.ip.toLowerCase().includes(q) ||
+        v.status.toLowerCase().includes(q)
+    );
+  }, [vpsList, search]);
 
   useEffect(() => {
     async function fetchVps() {
@@ -107,14 +120,25 @@ export default function VpsListPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-bold text-zinc-100">VPS Fleet</h1>
+        <div className="flex items-center gap-3">
+          <div className="relative w-56">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+            <Input
+              placeholder="Search name, IP..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9 border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
+            />
+          </div>
         <Link href="/vps/new">
           <Button className="bg-blue-600 hover:bg-blue-700 text-white">
             <Plus className="mr-2 h-4 w-4" />
             Add VPS
           </Button>
         </Link>
+        </div>
       </div>
 
       <div className="rounded-lg border border-zinc-700 bg-zinc-900">
@@ -131,14 +155,16 @@ export default function VpsListPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {vpsList.length === 0 ? (
+            {filtered.length === 0 ? (
               <TableRow className="border-zinc-700">
                 <TableCell colSpan={7} className="text-center text-zinc-500 py-8">
-                  No VPS servers configured. Click &quot;Add VPS&quot; to get started.
+                  {vpsList.length === 0
+                    ? "No VPS servers configured. Click \"Add VPS\" to get started."
+                    : "No VPS servers match your search."}
                 </TableCell>
               </TableRow>
             ) : (
-              vpsList.map((vps) => (
+              filtered.map((vps) => (
                 <TableRow
                   key={vps.id}
                   className="border-zinc-700 hover:bg-zinc-800/50 cursor-pointer"

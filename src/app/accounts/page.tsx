@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -13,7 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Trash2 } from "lucide-react";
+import { Trash2, Search } from "lucide-react";
 import { formatCurrency, formatProfit, profitColor } from "@/lib/format";
 
 interface AccountRow {
@@ -32,7 +33,19 @@ export default function AccountsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
   const router = useRouter();
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return accounts;
+    const q = search.toLowerCase();
+    return accounts.filter(
+      (a) =>
+        a.login.toLowerCase().includes(q) ||
+        a.server.toLowerCase().includes(q) ||
+        a.vpsName.toLowerCase().includes(q)
+    );
+  }, [accounts, search]);
 
   async function fetchAccounts() {
     try {
@@ -97,7 +110,18 @@ export default function AccountsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-zinc-100">All Accounts</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-zinc-100">All Accounts</h1>
+        <div className="relative w-64">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <Input
+            placeholder="Search login, server, VPS..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9 border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500"
+          />
+        </div>
+      </div>
 
       <div className="rounded-lg border border-zinc-700 bg-zinc-900">
         <Table>
@@ -114,14 +138,16 @@ export default function AccountsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {accounts.length === 0 ? (
+            {filtered.length === 0 ? (
               <TableRow className="border-zinc-700">
                 <TableCell colSpan={8} className="text-center text-zinc-500 py-8">
-                  No accounts found across any VPS.
+                  {accounts.length === 0
+                    ? "No accounts found across any VPS."
+                    : "No accounts match your search."}
                 </TableCell>
               </TableRow>
             ) : (
-              accounts.map((account) => {
+              filtered.map((account) => {
                 const key = `${account.vpsId}-${account.server}-${account.login}`;
                 return (
                   <TableRow
