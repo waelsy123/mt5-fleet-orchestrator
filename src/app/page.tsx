@@ -350,7 +350,7 @@ export default function DashboardPage() {
         {/* Recent activity */}
         <div>
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Recent Activity</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Recent Copier Activity</h2>
             <Link href="/copier/logs" className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
               View all <ChevronRight className="inline h-3 w-3" />
             </Link>
@@ -358,7 +358,7 @@ export default function DashboardPage() {
           {data.recentLogs.length === 0 ? (
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-zinc-800 py-10 text-center">
               <CircleDot className="mb-2 h-6 w-6 text-zinc-700" />
-              <p className="text-sm text-zinc-600">No trade activity yet</p>
+              <p className="text-sm text-zinc-600">No copier activity yet</p>
             </div>
           ) : (
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 divide-y divide-zinc-800/80">

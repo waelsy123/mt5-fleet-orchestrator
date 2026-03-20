@@ -19,7 +19,7 @@ const navLinks = [
   { href: "/accounts", label: "Accounts", icon: Users },
   { href: "/trade", label: "Trade", icon: TrendingUp },
   { href: "/copier", label: "Copy Trading", icon: Copy },
-  { href: "/copier/logs", label: "Trade History", icon: ScrollText },
+  { href: "/copier/logs", label: "Copier Log", icon: ScrollText },
   { href: "/docs", label: "API Docs", icon: FileText },
 ];
 

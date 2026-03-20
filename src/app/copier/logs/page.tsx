@@ -119,7 +119,7 @@ function CopierLogsContent() {
           <Link href="/copier" className="text-zinc-400 hover:text-zinc-200">
             <ArrowLeft className="h-5 w-5" />
           </Link>
-          <h1 className="text-2xl font-bold text-zinc-100">Trade History</h1>
+          <h1 className="text-2xl font-bold text-zinc-100">Copier Log</h1>
         </div>
         <Button
           variant="ghost"
