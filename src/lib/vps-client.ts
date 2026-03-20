@@ -201,7 +201,7 @@ export class VpsClient {
   }
 
   async getSystemStats(): Promise<VpsSystemStats> {
-    return this.request<VpsSystemStats>("/system/stats");
+    return this.request<VpsSystemStats>("/system/stats", {}, 15_000, 0); // wmic can be slow on fresh VPS
   }
 
   async getCopierStatus(): Promise<unknown> {

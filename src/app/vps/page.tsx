@@ -100,6 +100,8 @@ export default function VpsListPage() {
       }
     }
     fetchVps();
+    const interval = setInterval(fetchVps, 30_000); // refresh every 30s
+    return () => clearInterval(interval);
   }, []);
 
   if (loading) {

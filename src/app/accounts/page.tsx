@@ -22,6 +22,7 @@ interface AccountRow {
   vpsName: string;
   login: string;
   server: string;
+  status: "SETUP" | "ACTIVE" | "FAILED";
   balance: number;
   equity: number;
   profit: number;
@@ -164,11 +165,17 @@ export default function AccountsPage() {
                       {formatProfit(account.profit)}
                     </TableCell>
                     <TableCell>
-                      {account.connected ? (
-                        <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30">Connected</Badge>
-                      ) : (
-                        <Badge className="bg-red-500/20 text-red-500 border-red-500/30">Disconnected</Badge>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {account.status === "SETUP" ? (
+                          <Badge className="bg-yellow-500/20 text-yellow-500 border-yellow-500/30">Setting up...</Badge>
+                        ) : account.status === "FAILED" ? (
+                          <Badge className="bg-red-500/20 text-red-500 border-red-500/30">Setup Failed</Badge>
+                        ) : account.connected ? (
+                          <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30">Connected</Badge>
+                        ) : (
+                          <Badge className="bg-red-500/20 text-red-500 border-red-500/30">Disconnected</Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Button
