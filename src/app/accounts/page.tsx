@@ -64,6 +64,8 @@ export default function AccountsPage() {
 
   useEffect(() => {
     fetchAccounts();
+    const interval = setInterval(fetchAccounts, 30_000);
+    return () => clearInterval(interval);
   }, []);
 
   async function handleDelete(e: React.MouseEvent, account: AccountRow) {
