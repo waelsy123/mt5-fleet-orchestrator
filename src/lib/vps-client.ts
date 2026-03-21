@@ -27,6 +27,7 @@ export class VpsClient {
     retries: number = DEFAULT_RETRIES
   ): Promise<T> {
     let lastError: unknown;
+    const apiKey = process.env.VPS_API_KEY;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
       const controller = new AbortController();
@@ -38,6 +39,7 @@ export class VpsClient {
           signal: controller.signal,
           headers: {
             "Content-Type": "application/json",
+            ...(apiKey ? { "X-Api-Key": apiKey } : {}),
             ...options.headers,
           },
         });

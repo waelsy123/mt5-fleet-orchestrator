@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { decrypt } from "@/lib/crypto";
 import { startProvisioning } from "@/lib/provisioner";
 
 export async function POST(
@@ -15,7 +16,7 @@ export async function POST(
       vps.ip,
       vps.vncIp ?? vps.ip,
       vps.vncPort ?? 5900,
-      vps.password
+      decrypt(vps.password)
     );
 
     return NextResponse.json({ logId });

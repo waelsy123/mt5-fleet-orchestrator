@@ -21,6 +21,7 @@ BASE_DIR = os.environ.get("MT5_BASE_DIR", r"C:\MT5")
 BROKERS_FILE = Path(__file__).parent / "brokers.json"
 TIMEOUT = 15
 STATIC_DIR = Path(__file__).parent / "static"
+API_KEY = os.environ.get("API_KEY", "")
 
 # Cached MetaQuotes MT5 server list
 _mt5_servers_cache: list[str] = []
@@ -32,6 +33,23 @@ app = FastAPI(
     description="Trade on multiple MetaTrader 5 accounts via file-based bridge (PythonBridge EA).",
     version="1.0.0",
 )
+
+
+@app.middleware("http")
+async def check_api_key(request, call_next):
+    """Require X-Api-Key header if API_KEY env var is set."""
+    if API_KEY:
+        # Allow docs and health endpoints without auth
+        path = request.url.path
+        if path not in ("/", "/docs", "/openapi.json", "/redoc"):
+            key = request.headers.get("X-Api-Key", "")
+            if key != API_KEY:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid or missing API key"},
+                )
+    return await call_next(request)
 
 # Per-account locks to prevent concurrent commands to the same EA
 _locks: dict[str, threading.Lock] = {}
@@ -129,6 +147,7 @@ def get_account(server: str, login: str):
 
 def send_command(files_dir: str, cmd: str, timeout: int = TIMEOUT) -> dict:
     cmd_file = os.path.join(files_dir, "command.txt")
+    tmp_file = os.path.join(files_dir, "command.tmp")
     result_file = os.path.join(files_dir, "result.txt")
 
     if not os.path.exists(files_dir):
@@ -139,8 +158,10 @@ def send_command(files_dir: str, cmd: str, timeout: int = TIMEOUT) -> dict:
         if os.path.exists(result_file):
             os.remove(result_file)
 
-        with open(cmd_file, "w") as f:
+        # Atomic write: write to temp file, then rename to prevent EA reading partial data
+        with open(tmp_file, "w") as f:
             f.write(cmd)
+        os.replace(tmp_file, cmd_file)
 
         start = time.time()
         while time.time() - start < timeout:
@@ -260,9 +281,13 @@ def _find_installed_terminal() -> str | None:
 
 def _install_terminal(installer_path: str) -> str | None:
     """Run MT5 installer silently. Returns path to terminal64.exe or None."""
+    # Validate installer path is within BASE_DIR or Program Files
+    abs_path = os.path.abspath(installer_path)
+    if not (abs_path.startswith(os.path.abspath(BASE_DIR)) or
+            abs_path.startswith(r"C:\Program Files")):
+        return None
     subprocess.run(
-        ["powershell", "-Command",
-         f'Start-Process -FilePath "{installer_path}" -ArgumentList "/auto" -Wait'],
+        [installer_path, "/auto"],
         timeout=180,
         capture_output=True,
     )
@@ -272,7 +297,8 @@ def _install_terminal(installer_path: str) -> str | None:
 def _account_dir_name(server: str, login: str) -> str:
     """Generate directory name for an account: {server}_{login}."""
     safe_server = re.sub(r'[^\w\-]', '_', server)
-    return f"{safe_server}_{login}"
+    safe_login = re.sub(r'[^\w\-]', '_', login)
+    return f"{safe_server}_{safe_login}"
 
 
 def _copy_terminal_for_account(source_terminal: str, server: str, login: str) -> str:
@@ -343,12 +369,18 @@ def _get_new_data_dir(known_dirs: set) -> str | None:
 
 def _stop_terminal_for_account(dir_name: str):
     """Stop only the terminal for this account (by matching command line)."""
+    # Validate dir_name contains only safe characters (alphanumeric, underscore, hyphen)
+    if not re.match(r'^[\w\-]+$', dir_name):
+        return
     try:
+        # Use single-quoted PowerShell string to prevent injection
+        ps_script = (
+            "Get-WmiObject Win32_Process -Filter \"name='terminal64.exe'\" | "
+            "Where-Object { $_.CommandLine -match '" + dir_name + "' } | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+        )
         subprocess.run(
-            ["powershell", "-Command",
-             f'Get-WmiObject Win32_Process -Filter "name=\'terminal64.exe\'" | '
-             f'Where-Object {{ $_.CommandLine -match "{dir_name}" }} | '
-             f'ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}'],
+            ["powershell", "-NoProfile", "-Command", ps_script],
             capture_output=True, timeout=15,
         )
     except Exception:
@@ -361,6 +393,10 @@ def _start_terminal(terminal_path: str, ini_path: str, dir_name: str):
     Uses a .bat launcher to avoid quoting issues with schtasks.
     Does NOT use /portable — portable mode has a connection bug on build 5687+.
     """
+    # Validate dir_name to prevent injection in task names and file paths
+    if not re.match(r'^[\w\-]+$', dir_name):
+        raise ValueError(f"Invalid dir_name: {dir_name}")
+
     task_name = f"StartMT5_{dir_name}"
     bat_path = os.path.join(BASE_DIR, f"launch_{dir_name}.bat")
 
@@ -423,6 +459,14 @@ def add_account(req: AddAccountRequest):
 
     if not req.server:
         raise HTTPException(status_code=400, detail="server is required (or provide broker name)")
+
+    # Validate login is alphanumeric (MT5 logins are numeric)
+    if not re.match(r'^[\w]+$', req.login):
+        raise HTTPException(status_code=400, detail="login must be alphanumeric")
+
+    # Validate installer_url if provided — only allow HTTPS
+    if req.installer_url and not req.installer_url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="installer_url must use HTTPS")
 
     dir_name = _account_dir_name(req.server, req.login)
     account_dir = os.path.join(BASE_DIR, dir_name)
@@ -675,9 +719,20 @@ def search_installer(req: SearchInstallerRequest):
 
 @app.post("/installer/download", summary="Download installer from URL to VPS")
 def download_installer(req: DownloadInstallerRequest):
+    # Validate URL: only allow HTTPS from known domains
+    if not req.url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Only HTTPS URLs are allowed")
+
     os.makedirs(BASE_DIR, exist_ok=True)
-    filename = req.url.split("/")[-1]
+    # Use basename and sanitize to prevent path traversal
+    filename = os.path.basename(req.url.split("?")[0])
+    filename = re.sub(r'[^\w.\-]', '_', filename)
+    if not filename or filename.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid filename in URL")
     dest = os.path.join(BASE_DIR, filename)
+    # Verify dest is still within BASE_DIR
+    if not os.path.abspath(dest).startswith(os.path.abspath(BASE_DIR)):
+        raise HTTPException(status_code=400, detail="Invalid download path")
     try:
         _download_file(req.url, dest)
         size_mb = os.path.getsize(dest) / 1024 / 1024

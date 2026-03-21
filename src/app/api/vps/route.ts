@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { encrypt } from "@/lib/crypto";
 import { VpsClient } from "@/lib/vps-client";
+
+function stripPassword<T extends Record<string, unknown>>(obj: T): Omit<T, "password"> {
+  const { password: _, ...rest } = obj;
+  return rest;
+}
 
 export async function GET() {
   try {
@@ -9,7 +15,7 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
     });
     const result = vpsList.map((v) => ({
-      ...v,
+      ...stripPassword(v),
       accountCount: v._count.accounts,
       _count: undefined,
     }));
@@ -32,7 +38,7 @@ export async function POST(request: NextRequest) {
         ip,
         vncIp: vncIp ?? null,
         vncPort: vncPort ?? null,
-        password,
+        password: encrypt(password),
         apiPort: port,
       },
     });
@@ -71,13 +77,13 @@ export async function POST(request: NextRequest) {
           where: { id: vps.id },
           include: { accounts: true },
         });
-        return NextResponse.json(updated, { status: 201 });
+        return NextResponse.json(stripPassword(updated), { status: 201 });
       }
     } catch {
       // VPS API not reachable yet — that's fine, stays PENDING
     }
 
-    return NextResponse.json(vps, { status: 201 });
+    return NextResponse.json(stripPassword(vps), { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
