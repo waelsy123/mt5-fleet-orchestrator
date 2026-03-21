@@ -1,18 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSetupJob } from "@/lib/account-setup";
+import { getSetupJob, getLatestJobForVps } from "@/lib/account-setup";
 
-export async function GET(request: NextRequest) {
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ vpsId: string }> }
+) {
+  const { vpsId } = await params;
   const jobId = request.nextUrl.searchParams.get("jobId");
-  if (!jobId) {
-    return NextResponse.json({ error: "jobId required" }, { status: 400 });
-  }
 
-  const job = getSetupJob(jobId);
+  const job = jobId ? getSetupJob(jobId) : getLatestJobForVps(vpsId);
+
   if (!job) {
     return NextResponse.json({ error: "Job not found" }, { status: 404 });
   }
 
   return NextResponse.json({
+    jobId: job.id,
     status: job.status,
     steps: job.steps,
     error: job.error,

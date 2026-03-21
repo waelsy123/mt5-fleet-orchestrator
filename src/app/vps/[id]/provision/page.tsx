@@ -14,7 +14,7 @@ import {
   XCircle,
 } from "lucide-react";
 
-type ProvisionStatus = "idle" | "running" | "SUCCESS" | "FAILED";
+type ProvisionStatus = "idle" | "PROVISIONING" | "SUCCESS" | "FAILED";
 
 const STEPS = [
   { key: "ssh_check", label: "Checking SSH access", match: "Checking if SSH" },
@@ -91,8 +91,8 @@ export default function ProvisionPage({
         const res = await fetch(`/api/vps/${id}/progress/status`);
         if (res.ok) {
           const data = await res.json();
-          if (data.status === "RUNNING") {
-            setStatus("running");
+          if (data.status === "PROVISIONING") {
+            setStatus("PROVISIONING");
             setLogs(data.logs || "");
             connectSSE();
           } else if (data.status === "SUCCESS" || data.status === "FAILED") {
@@ -143,7 +143,7 @@ export default function ProvisionPage({
   }
 
   async function startProvision() {
-    setStatus("running");
+    setStatus("PROVISIONING");
     setLogs("");
 
     try {
@@ -185,16 +185,16 @@ export default function ProvisionPage({
             <div className="flex items-center gap-4">
               <Button
                 onClick={startProvision}
-                disabled={status === "running"}
+                disabled={status === "PROVISIONING"}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 <Play className="mr-2 h-4 w-4" />
-                {status === "running"
+                {status === "PROVISIONING"
                   ? "Provisioning..."
                   : "Start Provisioning"}
               </Button>
 
-              {status === "running" && (
+              {status === "PROVISIONING" && (
                 <Badge className="bg-blue-500/20 text-blue-500 border-blue-500/30 text-sm px-3 py-1 animate-pulse">
                   RUNNING
                 </Badge>
@@ -227,7 +227,7 @@ export default function ProvisionPage({
             <div className="mb-6">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm text-zinc-400">
-                  {status === "running" && (
+                  {status === "PROVISIONING" && (
                     <span className="flex items-center gap-2">
                       <Loader2 className="h-3 w-3 animate-spin" />
                       {progress.currentLabel}
@@ -264,7 +264,7 @@ export default function ProvisionPage({
               {STEPS.map((step, i) => {
                 const completed = progress.currentStep > i;
                 const active =
-                  status === "running" && progress.currentStep === i;
+                  status === "PROVISIONING" && progress.currentStep === i;
                 const failed =
                   status === "FAILED" && progress.currentStep === i;
 

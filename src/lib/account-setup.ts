@@ -9,7 +9,7 @@ interface SetupJob {
   vpsId: string;
   login: string;
   server: string;
-  status: "running" | "success" | "failed";
+  status: "PENDING" | "SUCCESS" | "FAILED";
   steps: string[];
   error?: string;
 }
@@ -42,7 +42,7 @@ export async function startAccountSetup(
     vpsId,
     login: req.login,
     server: req.server,
-    status: "running",
+    status: "PENDING",
     steps: ["Starting account setup..."],
   };
   jobs.set(jobId, job);
@@ -67,7 +67,7 @@ export async function startAccountSetup(
 
   // Run in background
   runSetup(job, ip, apiPort, req).catch((err) => {
-    job.status = "failed";
+    job.status = "FAILED";
     job.error = err instanceof Error ? err.message : String(err);
     job.steps.push(`ERROR: ${job.error}`);
   });
@@ -147,11 +147,11 @@ async function runSetup(
       job.steps.push("The terminal may need a moment to connect, or the market may be closed.");
     }
 
-    job.status = "success";
+    job.status = "SUCCESS";
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     job.steps.push(`Failed: ${message}`);
-    job.status = "failed";
+    job.status = "FAILED";
     job.error = message;
     notifyTelegram(`🚨 <b>Account Setup Failed</b>\n<code>${req.login}@${req.server}</code>\n${message}`);
 
