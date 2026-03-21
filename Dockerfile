@@ -2,7 +2,7 @@ FROM node:20-slim AS base
 
 # Install Python 3 + pip for setup_vps.py provisioning
 RUN apt-get update && \
-    apt-get install -y python3 python3-pip python3-dev libffi-dev && \
+    apt-get install -y python3 python3-pip python3-venv python3-dev libffi-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies in a venv
