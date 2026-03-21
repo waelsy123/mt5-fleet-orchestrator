@@ -110,8 +110,7 @@ class CopierSession {
   private targetStates: Map<string, TargetState> = new Map();
   private globalLog: LogEntry[] = [];
   private maxLog = 200;
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private polling = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(id: string) {
     this.id = id;
@@ -208,11 +207,19 @@ class CopierSession {
       await this.reconstructMirrors();
     }
 
-    this.timer = setInterval(() => {
-      if (!this.running || this.polling) return;
-      this.polling = true;
-      this.poll().finally(() => { this.polling = false; });
-    }, 1000);
+    // Use setTimeout chain instead of setInterval to prevent overlapping polls
+    const scheduleNext = () => {
+      if (!this.running) return;
+      this.timer = setTimeout(async () => {
+        if (!this.running) return;
+        try {
+          await this.poll();
+        } finally {
+          scheduleNext();
+        }
+      }, 1000);
+    };
+    scheduleNext();
   }
 
   /** Count active copied positions across all targets. */
@@ -231,7 +238,7 @@ class CopierSession {
     // Stop polling first so no new trades are copied
     this.running = false;
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
 
@@ -268,7 +275,7 @@ class CopierSession {
   stop() {
     this.running = false;
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
     this.log("STOP", "Copier stopped");
@@ -560,6 +567,21 @@ class CopierSession {
       if (result?.status === "OK") {
         ts.lastSyncedAt = Date.now();
         ts.lastError = null;
+        // MT5 partial close may create a new ticket for the remaining volume.
+        // Search for the updated position to keep mirror.targetTicket accurate.
+        try {
+          const positions = await client.getPositions(ts.account.server, ts.account.login);
+          const remaining = positions.positions?.find((p) => p.comment === comment);
+          if (remaining) {
+            const newTicket = parseInt(String(remaining.pos), 10);
+            if (!isNaN(newTicket)) mirror.targetTicket = newTicket;
+          } else {
+            // Position fully closed (volume was exact) — mark as closed
+            ts.mirrors[ticket] = { status: "closed" };
+          }
+        } catch {
+          // Non-fatal: mirror may point to old ticket, fallback search will handle it
+        }
         this.addTargetLog(key, "PARTIAL", `Partial close ${closeVolume} of ${pos.symbol} ticket #${targetTicket}`);
       } else {
         const err = result?.message ?? result?.raw ?? JSON.stringify(result);

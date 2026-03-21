@@ -1,4 +1,11 @@
+import { createHash } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+
+function deriveToken(secret: string): string {
+  return createHash("sha256")
+    .update(secret + ":mt5_session")
+    .digest("hex");
+}
 
 export async function POST(request: NextRequest) {
   const { password } = await request.json();
@@ -12,12 +19,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Wrong password" }, { status: 401 });
   }
 
+  // Store a derived token in the cookie, never the raw secret
+  const token = deriveToken(secret);
   const res = NextResponse.json({ ok: true });
-  res.cookies.set("mt5_auth", secret, {
+  res.cookies.set("mt5_auth", token, {
     httpOnly: true,
     secure: true,
-    sameSite: "lax",
-    maxAge: 30 * 24 * 60 * 60, // 30 days
+    sameSite: "strict",
+    maxAge: 7 * 24 * 60 * 60, // 7 days
     path: "/",
   });
   return res;

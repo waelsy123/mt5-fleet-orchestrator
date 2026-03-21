@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { encrypt } from "@/lib/crypto";
 import { copier } from "@/lib/copier";
+
+function stripPassword<T extends Record<string, unknown>>(obj: T): Omit<T, "password"> {
+  const { password: _, ...rest } = obj;
+  return rest;
+}
 
 export async function GET(
   _request: NextRequest,
@@ -12,7 +18,7 @@ export async function GET(
       where: { id },
       include: { accounts: true },
     });
-    return NextResponse.json(vps);
+    return NextResponse.json(stripPassword(vps));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
@@ -26,11 +32,21 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await request.json();
+
+    // Whitelist allowed fields to prevent mass assignment
+    const data: Record<string, unknown> = {};
+    if (body.name !== undefined) data.name = body.name;
+    if (body.ip !== undefined) data.ip = body.ip;
+    if (body.vncIp !== undefined) data.vncIp = body.vncIp;
+    if (body.vncPort !== undefined) data.vncPort = body.vncPort;
+    if (body.apiPort !== undefined) data.apiPort = body.apiPort;
+    if (body.password !== undefined) data.password = encrypt(body.password);
+
     const vps = await prisma.vps.update({
       where: { id },
-      data: body,
+      data,
     });
-    return NextResponse.json(vps);
+    return NextResponse.json(stripPassword(vps));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
