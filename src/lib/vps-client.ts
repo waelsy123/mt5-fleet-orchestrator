@@ -226,4 +226,16 @@ export class VpsClient {
   async getBrokers(): Promise<unknown> {
     return this.request("/brokers");
   }
+
+  async getDeals(
+    server: string,
+    login: string,
+    days = 30
+  ): Promise<unknown> {
+    return this.request(
+      `/accounts/${encodeURIComponent(server)}/${login}/deals?days=${days}`,
+      {},
+      30_000, 0 // 30s timeout, no retries — can be slow for large history
+    );
+  }
 }
