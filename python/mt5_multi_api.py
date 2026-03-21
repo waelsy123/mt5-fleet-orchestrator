@@ -859,6 +859,28 @@ def close(server: str, login: str, req: CloseRequest):
     return send_command(acc["files_dir"], f"CLOSE|{req.symbol}")
 
 
+class CloseTicketRequest(BaseModel):
+    ticket: int
+    volume: float = 0
+
+
+@app.post("/accounts/{server}/{login}/close-ticket", summary="Close a specific position by ticket")
+def close_ticket(server: str, login: str, req: CloseTicketRequest):
+    acc = get_account(server, login)
+    cmd = f"CLOSE_TICKET|{req.ticket}"
+    if req.volume > 0:
+        cmd += f"|{req.volume}"
+    return send_command(acc["files_dir"], cmd)
+
+
+@app.get("/accounts/{server}/{login}/deals", summary="Get closed trade history")
+def get_deals(server: str, login: str, days: int = 30):
+    """Returns closed deals/trades for the last N days (max 90, default 30)."""
+    days = min(max(days, 1), 90)
+    acc = get_account(server, login)
+    return send_command(acc["files_dir"], f"DEALS|{days}", timeout=30)
+
+
 # --- Opposite Copier Engine ---
 
 class OppositeCopier:
