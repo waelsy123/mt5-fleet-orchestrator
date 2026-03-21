@@ -531,7 +531,7 @@ export const openApiSpec = {
                   properties: {
                     status: {
                       type: "string",
-                      enum: ["running", "success", "failed"],
+                      enum: ["PENDING", "SUCCESS", "FAILED"],
                     },
                     steps: {
                       type: "array",

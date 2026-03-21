@@ -98,7 +98,7 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
   const [serverSearchTimeout, setServerSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
   const [setupJobId, setSetupJobId] = useState<string | null>(null);
   const [setupSteps, setSetupSteps] = useState<string[]>([]);
-  const [setupStatus, setSetupStatus] = useState<"idle" | "running" | "success" | "failed">("idle");
+  const [setupStatus, setSetupStatus] = useState<"idle" | "PENDING" | "SUCCESS" | "FAILED">("idle");
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [copierInfo, setCopierInfo] = useState<{ sessionId: string; role: string; login: string; server: string }[]>([]);
 
@@ -138,6 +138,7 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
     fetchVps();
     fetchStats();
     fetchCopierInfo();
+    checkRunningSetup();
     const interval = setInterval(() => {
       fetchVps();
       fetchStats();
@@ -147,10 +148,56 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  async function checkRunningSetup() {
+    try {
+      const res = await fetch(`/api/accounts/${id}/setup-status`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.status === "PENDING") {
+        setAccountForm((p) => ({ ...p, login: data.login || "", server: data.server || "" }));
+        setSetupJobId(data.jobId);
+        setSetupSteps(data.steps || []);
+        setSetupStatus("PENDING");
+        setDialogOpen(true);
+        startSetupPolling(data.jobId);
+      }
+    } catch {
+      // No running job
+    }
+  }
+
+  function startSetupPolling(jobId: string) {
+    const pollInterval = setInterval(async () => {
+      try {
+        const statusRes = await fetch(
+          `/api/accounts/${id}/setup-status?jobId=${jobId}`
+        );
+        if (!statusRes.ok) return;
+        const statusData = await statusRes.json();
+        setSetupSteps(statusData.steps || []);
+
+        if (statusData.status === "SUCCESS") {
+          clearInterval(pollInterval);
+          setSetupStatus("SUCCESS");
+          setSubmitting(false);
+          toast.success(`Account ${statusData.login || accountForm.login} added!`);
+          fetchVps();
+        } else if (statusData.status === "FAILED") {
+          clearInterval(pollInterval);
+          setSetupStatus("FAILED");
+          setSubmitting(false);
+          toast.error(statusData.error || "Account setup failed");
+        }
+      } catch {
+        // polling error — keep trying
+      }
+    }, 2000);
+  }
+
   async function handleAddAccount(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
-    setSetupStatus("running");
+    setSetupStatus("PENDING");
     setSetupSteps(["Submitting account setup request..."]);
 
     try {
@@ -171,35 +218,9 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
       }
       const { jobId } = await res.json();
       setSetupJobId(jobId);
-
-      // Poll for status
-      const pollInterval = setInterval(async () => {
-        try {
-          const statusRes = await fetch(
-            `/api/accounts/${id}/setup-status?jobId=${jobId}`
-          );
-          if (!statusRes.ok) return;
-          const statusData = await statusRes.json();
-          setSetupSteps(statusData.steps || []);
-
-          if (statusData.status === "success") {
-            clearInterval(pollInterval);
-            setSetupStatus("success");
-            setSubmitting(false);
-            toast.success(`Account ${accountForm.login} added!`);
-            fetchVps();
-          } else if (statusData.status === "failed") {
-            clearInterval(pollInterval);
-            setSetupStatus("failed");
-            setSubmitting(false);
-            toast.error(statusData.error || "Account setup failed");
-          }
-        } catch {
-          // polling error — keep trying
-        }
-      }, 2000);
+      startSetupPolling(jobId);
     } catch (err: unknown) {
-      setSetupStatus("failed");
+      setSetupStatus("FAILED");
       setSetupSteps((prev) => [
         ...prev,
         `ERROR: ${err instanceof Error ? err.message : "Unknown error"}`,
@@ -398,7 +419,7 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-zinc-100">Accounts</CardTitle>
           <Dialog open={dialogOpen} onOpenChange={(open) => {
-            if (!open && setupStatus !== "running") resetSetupDialog();
+            if (!open && setupStatus !== "PENDING") resetSetupDialog();
             else setDialogOpen(open);
           }}>
             <DialogTrigger>
@@ -498,19 +519,19 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
                 <div className="space-y-4">
                   {/* Status indicator */}
                   <div className="flex items-center gap-3">
-                    {setupStatus === "running" && (
+                    {setupStatus === "PENDING" && (
                       <div className="flex items-center gap-2 text-blue-400">
                         <Loader2 className="h-5 w-5 animate-spin" />
                         <span className="text-sm font-medium">Setting up account... (2-4 minutes)</span>
                       </div>
                     )}
-                    {setupStatus === "success" && (
+                    {setupStatus === "SUCCESS" && (
                       <div className="flex items-center gap-2 text-emerald-400">
                         <CheckCircle2 className="h-5 w-5" />
                         <span className="text-sm font-medium">Account setup complete!</span>
                       </div>
                     )}
-                    {setupStatus === "failed" && (
+                    {setupStatus === "FAILED" && (
                       <div className="flex items-center gap-2 text-red-400">
                         <XCircle className="h-5 w-5" />
                         <span className="text-sm font-medium">Account setup failed</span>
@@ -519,7 +540,7 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
                   </div>
 
                   {/* Progress bar */}
-                  {setupStatus === "running" && (
+                  {setupStatus === "PENDING" && (
                     <div className="h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
                       <div className="h-full w-full rounded-full bg-blue-500 animate-pulse" />
                     </div>
@@ -538,22 +559,22 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
                         {step}
                       </div>
                     ))}
-                    {setupStatus === "running" && (
+                    {setupStatus === "PENDING" && (
                       <div className="text-zinc-500 animate-pulse mt-1">Waiting for VPS response...</div>
                     )}
                   </div>
 
                   {/* Close button when done */}
-                  {setupStatus !== "running" && (
+                  {setupStatus !== "PENDING" && (
                     <div className="flex gap-3 pt-2">
                       <Button
                         onClick={resetSetupDialog}
-                        className={setupStatus === "success"
+                        className={setupStatus === "SUCCESS"
                           ? "bg-emerald-600 hover:bg-emerald-700 text-white"
                           : "bg-zinc-700 hover:bg-zinc-600 text-white"
                         }
                       >
-                        {setupStatus === "success" ? "Done" : "Close"}
+                        {setupStatus === "SUCCESS" ? "Done" : "Close"}
                       </Button>
                     </div>
                   )}
