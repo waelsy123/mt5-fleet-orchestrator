@@ -502,6 +502,12 @@ def phase2_deploy(vps_ip, password):
     print("  Generated start_api.ps1 via SFTP")
     sftp.close()
 
+    # Set API_KEY env var on VPS if VPS_API_KEY is configured in orchestrator
+    api_key = os.environ.get("VPS_API_KEY", "")
+    if api_key:
+        ssh_run(client, f'setx /M API_KEY "{api_key}"')
+        print("  API_KEY set as system environment variable")
+
     # Step 5: Firewall + scheduled task
     print("\n[5/6] Configuring firewall and scheduled task...")
     ssh_run(client, 'netsh advfirewall firewall add rule name=MT5API dir=in action=allow protocol=tcp localport=8000')
