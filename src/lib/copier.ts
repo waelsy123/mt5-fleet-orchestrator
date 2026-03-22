@@ -127,8 +127,10 @@ class CopierSession {
     if (this.globalLog.length > this.maxLog) {
       this.globalLog = this.globalLog.slice(-this.maxLog);
     }
-    if (action === "ERROR" || action === "FAIL") {
-      notifyTelegram(`🚨 <b>Copier ${action}</b>\nSource: <code>${this.sourceLabel()}</code>\n${detail}`);
+    const icons: Record<string, string> = { ERROR: "🚨", FAIL: "🚨", START: "🟢", STOP: "🔴", NEW: "📈", CLOSED: "📉", PARTIAL: "📊", RESTORE: "🔄" };
+    const icon = icons[action] || "ℹ️";
+    if (action === "ERROR" || action === "FAIL" || action === "START" || action === "STOP" || action === "NEW" || action === "CLOSED") {
+      notifyTelegram(`${icon} <b>Copier ${action}</b>\nSource: <code>${this.sourceLabel()}</code>\n${detail}`);
     }
     console.log(`[COPIER:${this.id}] ${action}: ${detail}`);
     prisma.copierLog.create({ data: { sessionId: this.id, action, detail } }).catch(() => {});
@@ -139,9 +141,11 @@ class CopierSession {
     if (!ts) return;
     const entry = { time: now(), action, detail };
     ts.log.push(entry);
-    if (action === "ERROR" || action === "FAIL") {
+    const icons: Record<string, string> = { ERROR: "🚨", FAIL: "🚨", COPIED: "✅", CLOSED: "🔒", PARTIAL: "📊", SKIP: "⏭️" };
+    const icon = icons[action] || "ℹ️";
+    if (action === "ERROR" || action === "FAIL" || action === "COPIED" || action === "CLOSED") {
       notifyTelegram(
-        `🚨 <b>Copier ${action}</b>\nSource: <code>${this.sourceLabel()}</code>\nTarget: <code>${ts.account.login}@${ts.account.server}</code>\n${detail}`
+        `${icon} <b>${action}</b>\nSource: <code>${this.sourceLabel()}</code>\nTarget: <code>${ts.account.login}@${ts.account.server}</code>\n${detail}`
       );
     }
     if (ts.log.length > this.maxLog) {
