@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { VpsClient } from "@/lib/vps-client";
-import { readFileSync } from "fs";
+import { decrypt } from "@/lib/crypto";
+import { spawn } from "child_process";
 import { join } from "path";
 
 export async function POST(
@@ -11,18 +11,40 @@ export async function POST(
   try {
     const { id } = await params;
     const vps = await prisma.vps.findUniqueOrThrow({ where: { id } });
+    const password = decrypt(vps.password);
 
-    // Read the current EA source from the repo
-    const eaPath = join(process.cwd(), "python", "PythonBridge.mq5");
-    const content = readFileSync(eaPath, "utf-8");
+    const scriptPath = join(process.cwd(), "python", "update_agent.py");
+    const env = { ...process.env };
 
-    const client = new VpsClient({ ip: vps.ip, apiPort: vps.apiPort });
-    const result = await client.updateEa(content);
+    const output = await new Promise<string>((resolve, reject) => {
+      const logs: string[] = [];
+      const child = spawn("python3", ["-u", scriptPath, vps.ip, password], { env });
+
+      child.stdout.on("data", (data) => logs.push(data.toString()));
+      child.stderr.on("data", (data) => logs.push(data.toString()));
+
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error("Timeout after 3 minutes"));
+      }, 180_000);
+
+      child.on("close", (code) => {
+        clearTimeout(timeout);
+        if (code === 0) resolve(logs.join(""));
+        else reject(new Error(`Exit code ${code}: ${logs.join("")}`));
+      });
+
+      child.on("error", (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+    });
 
     return NextResponse.json({
       vpsId: id,
       vpsName: vps.name,
-      ...result,
+      status: "ok",
+      output,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
