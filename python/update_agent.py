@@ -61,9 +61,9 @@ def main():
 
     print("[3/4] Restarting API...")
     ssh_run(client, r'taskkill /f /im python.exe 2>nul', timeout=10)
-    time.sleep(2)
+    time.sleep(3)
     ssh_run(client, r'schtasks /Run /TN MT5API')
-    time.sleep(5)
+    time.sleep(10)
 
     print("[4/4] Verifying API...")
     import urllib.request
