@@ -240,6 +240,100 @@ def list_accounts():
     return load_accounts()
 
 
+@app.get("/system/stats", summary="Get VPS system stats (CPU, memory, disk, MT5 processes)")
+def system_stats():
+    """Returns CPU, memory, disk usage and MT5 terminal process count."""
+    result = {}
+
+    # CPU — use wmic (available on all Windows)
+    try:
+        out = subprocess.run(
+            'wmic cpu get loadpercentage /value',
+            shell=True, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        for line in out.splitlines():
+            if line.startswith("LoadPercentage="):
+                result["cpuPercent"] = int(line.split("=", 1)[1])
+    except Exception:
+        result["cpuPercent"] = None
+
+    # Memory
+    try:
+        out = subprocess.run(
+            'wmic OS get TotalVisibleMemorySize,FreePhysicalMemory /value',
+            shell=True, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        mem = {}
+        for line in out.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                mem[k.strip()] = int(v.strip()) if v.strip().isdigit() else 0
+        total_kb = mem.get("TotalVisibleMemorySize", 0)
+        free_kb = mem.get("FreePhysicalMemory", 0)
+        used_kb = total_kb - free_kb
+        result["memoryTotalMB"] = round(total_kb / 1024)
+        result["memoryUsedMB"] = round(used_kb / 1024)
+        result["memoryFreeMB"] = round(free_kb / 1024)
+        result["memoryPercent"] = round(used_kb / total_kb * 100) if total_kb > 0 else None
+    except Exception:
+        result["memoryTotalMB"] = None
+        result["memoryUsedMB"] = None
+        result["memoryFreeMB"] = None
+        result["memoryPercent"] = None
+
+    # Disk (C: drive)
+    try:
+        out = subprocess.run(
+            'wmic logicaldisk where "DeviceID=\'C:\'" get Size,FreeSpace /value',
+            shell=True, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        disk = {}
+        for line in out.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                disk[k.strip()] = int(v.strip()) if v.strip().isdigit() else 0
+        total_b = disk.get("Size", 0)
+        free_b = disk.get("FreeSpace", 0)
+        used_b = total_b - free_b
+        result["diskTotalGB"] = round(total_b / (1024**3), 1)
+        result["diskUsedGB"] = round(used_b / (1024**3), 1)
+        result["diskFreeGB"] = round(free_b / (1024**3), 1)
+        result["diskPercent"] = round(used_b / total_b * 100) if total_b > 0 else None
+    except Exception:
+        result["diskTotalGB"] = None
+        result["diskUsedGB"] = None
+        result["diskFreeGB"] = None
+        result["diskPercent"] = None
+
+    # MT5 terminal processes
+    try:
+        out = subprocess.run(
+            'tasklist /FI "IMAGENAME eq terminal64.exe" /NH',
+            shell=True, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        count = sum(1 for line in out.splitlines() if "terminal64.exe" in line.lower())
+        result["mt5Processes"] = count
+    except Exception:
+        result["mt5Processes"] = None
+
+    # Uptime
+    try:
+        out = subprocess.run(
+            'wmic os get LastBootUpTime /value',
+            shell=True, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        for line in out.splitlines():
+            if line.startswith("LastBootUpTime="):
+                boot_str = line.split("=", 1)[1].split(".")[0]  # e.g. 20260324150000
+                from datetime import datetime
+                boot_time = datetime.strptime(boot_str, "%Y%m%d%H%M%S")
+                result["uptimeSeconds"] = int((datetime.now() - boot_time).total_seconds())
+    except Exception:
+        result["uptimeSeconds"] = None
+
+    return result
+
+
 class EaUpdateRequest(BaseModel):
     content: str  # MQL5 source code
 
