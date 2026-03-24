@@ -6,6 +6,7 @@ import type {
   VpsDashboardAccount,
   VpsDashboardData,
   VpsPositions,
+  VpsSymbolInfo,
   VpsSystemStats,
 } from "./types";
 
@@ -199,6 +200,26 @@ export class VpsClient {
       `/accounts/${encodeURIComponent(server)}/${login}/close-ticket`,
       { method: "POST", body: JSON.stringify(body) },
       DEFAULT_TIMEOUT_MS, 0
+    );
+  }
+
+  async updateEa(content: string): Promise<{ reloaded: number; total: number; results: unknown[] }> {
+    return this.request(
+      "/ea/update",
+      { method: "POST", body: JSON.stringify({ content }) },
+      120_000, 0 // 2 min timeout (compilation takes time), no retries
+    );
+  }
+
+  async getSymbolInfo(
+    server: string,
+    login: string,
+    symbol: string
+  ): Promise<VpsSymbolInfo> {
+    return this.request<VpsSymbolInfo>(
+      `/accounts/${encodeURIComponent(server)}/${login}/symbol-info?symbol=${encodeURIComponent(symbol)}`,
+      {},
+      10_000, 0 // 10s timeout, no retries
     );
   }
 

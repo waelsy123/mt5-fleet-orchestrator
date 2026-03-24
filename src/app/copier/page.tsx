@@ -38,6 +38,12 @@ interface AccountOption {
 
 type CopyMode = "follow" | "opposite";
 
+interface ContractSizeInfo {
+  source: number;
+  target: number;
+  ratio: number;
+}
+
 interface TargetStatus {
   key: string;
   vpsId: string;
@@ -51,6 +57,7 @@ interface TargetStatus {
   lastError: string | null;
   lastSyncedAt: number | null;
   log: { time: string; action: string; detail: string }[];
+  contractSizeRatios?: Record<string, ContractSizeInfo>;
 }
 
 interface SessionStatus {
@@ -884,7 +891,10 @@ function TargetRow({
             {t.mode}
           </span>
         </td>
-        <td className="px-4 py-2 font-mono text-xs text-zinc-300">x{t.volumeMult}</td>
+        <td className="px-4 py-2 font-mono text-xs text-zinc-300">
+          <span>x{t.volumeMult}</span>
+          <ContractSizeLabel ratios={t.contractSizeRatios} volumeMult={t.volumeMult} />
+        </td>
         <td className="px-4 py-2">{targetStatusIcon(t)}</td>
         <td className="px-4 py-2">{targetStatusBadge(t)}</td>
         <td className="px-4 py-2 text-zinc-400">{timeSince(t.lastSyncedAt)}</td>
@@ -937,6 +947,28 @@ function TargetRow({
         </tr>
       )}
     </>
+  );
+}
+
+// ── Contract Size Label ──
+
+function ContractSizeLabel({ ratios, volumeMult }: { ratios?: Record<string, ContractSizeInfo>; volumeMult: number }) {
+  if (!ratios) return null;
+  const entries = Object.entries(ratios).filter(([, v]) => v.ratio !== 1);
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="mt-0.5 space-y-0.5">
+      {entries.map(([symbol, info]) => {
+        const effective = volumeMult * info.ratio;
+        return (
+          <div key={symbol} className="text-[10px] text-amber-400/80" title={`Contract size: source=${info.source} target=${info.target}`}>
+            CS {info.source}→{info.target} {symbol}
+            <span className="ml-1 text-amber-300">eff. x{effective % 1 === 0 ? effective : effective.toFixed(2)}</span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

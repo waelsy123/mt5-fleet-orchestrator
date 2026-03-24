@@ -79,6 +79,12 @@ export interface VpsSystemStats {
   uptimeSeconds: number | null;
 }
 
+export interface VpsSymbolInfo {
+  status: string;
+  symbol: string;
+  contract_size: string;
+}
+
 export interface CopierStartRequest {
   source: string;
   target: string;

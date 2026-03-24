@@ -240,6 +240,95 @@ def list_accounts():
     return load_accounts()
 
 
+class EaUpdateRequest(BaseModel):
+    content: str  # MQL5 source code
+
+
+@app.post("/ea/update", summary="Hot-reload PythonBridge EA on all terminals")
+def update_ea(req: EaUpdateRequest):
+    """Upload new EA source, copy to all terminals, restart them.
+
+    Flow:
+    1. Write content to C:\\MT5\\PythonBridge.mq5 (master copy)
+    2. Copy .mq5 to each account's Experts dir and delete old .ex5
+    3. Kill all terminal processes
+    4. Restart each terminal via its scheduled task
+    5. Wait for EA compilation and verify
+    """
+    # 1. Write master copy
+    master = os.path.join(BASE_DIR, "PythonBridge.mq5")
+    os.makedirs(BASE_DIR, exist_ok=True)
+    with open(master, "w", newline="") as f:
+        f.write(req.content)
+
+    accounts = load_accounts()
+    results = []
+
+    # 2. Copy to all account Experts dirs
+    for key, acc in accounts.items():
+        experts_dir = os.path.join(acc["install_dir"], "MQL5", "Experts")
+        try:
+            os.makedirs(experts_dir, exist_ok=True)
+            shutil.copy2(master, os.path.join(experts_dir, "PythonBridge.mq5"))
+            # Delete compiled .ex5 to force recompilation
+            ex5 = os.path.join(experts_dir, "PythonBridge.ex5")
+            if os.path.exists(ex5):
+                os.remove(ex5)
+            results.append({"account": key, "status": "copied"})
+        except Exception as e:
+            results.append({"account": key, "status": "copy_failed", "error": str(e)})
+
+    if not accounts:
+        return {"reloaded": 0, "total": 0, "results": [], "message": "No accounts registered"}
+
+    # 3. Stop all terminals
+    for key, acc in accounts.items():
+        dir_name = _account_dir_name(acc["server"], acc["login"])
+        _stop_terminal_for_account(dir_name)
+
+    time.sleep(3)
+
+    # 4. Restart each terminal
+    for key, acc in accounts.items():
+        dir_name = _account_dir_name(acc["server"], acc["login"])
+        terminal_path = os.path.join(BASE_DIR, dir_name, "terminal64.exe")
+        ini_path = os.path.join(BASE_DIR, dir_name, "startup.ini")
+        if os.path.exists(terminal_path):
+            try:
+                _start_terminal(terminal_path, ini_path, dir_name)
+            except Exception as e:
+                for r in results:
+                    if r["account"] == key:
+                        r["restart_error"] = str(e)
+
+    # 5. Wait for EA compilation + verify
+    time.sleep(10)
+    verified = 0
+    for key, acc in accounts.items():
+        experts_dir = os.path.join(acc["install_dir"], "MQL5", "Experts")
+        ex5 = os.path.join(experts_dir, "PythonBridge.ex5")
+        # Poll for .ex5 up to 30s
+        for _ in range(6):
+            if os.path.exists(ex5):
+                break
+            time.sleep(5)
+        if os.path.exists(ex5):
+            verified += 1
+            for r in results:
+                if r["account"] == key:
+                    r["status"] = "ok"
+        else:
+            for r in results:
+                if r["account"] == key:
+                    r["status"] = "compile_timeout"
+
+    return {
+        "reloaded": verified,
+        "total": len(accounts),
+        "results": results,
+    }
+
+
 def load_brokers() -> dict:
     """Load broker configurations from brokers.json."""
     if BROKERS_FILE.exists():
@@ -825,6 +914,13 @@ def account_info(server: str, login: str, symbol: str = "EURUSD"):
 def get_positions(server: str, login: str):
     acc = get_account(server, login)
     return send_command(acc["files_dir"], "POSITIONS")
+
+
+@app.get("/accounts/{server}/{login}/symbol-info", summary="Get symbol contract size")
+def symbol_info(server: str, login: str, symbol: str = "EURUSD"):
+    acc = get_account(server, login)
+    activate_symbol(acc["files_dir"], symbol)
+    return send_command(acc["files_dir"], f"SYMBOL_INFO|{symbol}")
 
 
 @app.get("/accounts/{server}/{login}/quote", summary="Get symbol quote")

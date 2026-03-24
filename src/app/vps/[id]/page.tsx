@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Plus, Trash2, Play, RefreshCw, Loader2, CheckCircle2, XCircle, Cpu, HardDrive, MemoryStick, Monitor, Copy } from "lucide-react";
+import { Plus, Trash2, Play, RefreshCw, Loader2, CheckCircle2, XCircle, Cpu, HardDrive, MemoryStick, Monitor, Copy, Upload } from "lucide-react";
 import { formatCurrency, formatProfit, profitColor } from "@/lib/format";
 
 interface Account {
@@ -93,6 +93,7 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
   });
   const [submitting, setSubmitting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [reloadingEa, setReloadingEa] = useState(false);
   const [serverResults, setServerResults] = useState<{ server: string; installer_url: string }[]>([]);
   const [serverDropdownOpen, setServerDropdownOpen] = useState(false);
   const [serverSearchTimeout, setServerSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
@@ -299,6 +300,21 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  async function handleReloadEa() {
+    if (!confirm("This will restart all MT5 terminals on this VPS (~30s downtime). Continue?")) return;
+    setReloadingEa(true);
+    try {
+      const res = await fetch(`/api/vps/${id}/reload-ea`, { method: "POST" });
+      if (!res.ok) throw new Error("Failed to reload EA");
+      const data = await res.json();
+      toast.success(`EA reloaded: ${data.reloaded}/${data.total} terminals updated`);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "EA reload failed");
+    } finally {
+      setReloadingEa(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -326,6 +342,15 @@ export default function VpsDetailPage({ params }: { params: Promise<{ id: string
           <p className="text-sm text-zinc-400 font-mono">{vps.ip}</p>
         </div>
         <div className="flex gap-2">
+          <Button
+            onClick={handleReloadEa}
+            disabled={reloadingEa}
+            variant="ghost"
+            className="text-amber-500 hover:text-amber-400 hover:bg-amber-500/10"
+          >
+            <Upload className={`mr-2 h-4 w-4 ${reloadingEa ? "animate-spin" : ""}`} />
+            {reloadingEa ? "Reloading EA..." : "Reload EA"}
+          </Button>
           <Button
             onClick={handleSync}
             disabled={syncing}

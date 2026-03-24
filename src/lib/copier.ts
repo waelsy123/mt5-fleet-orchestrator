@@ -33,6 +33,12 @@ export interface TargetAccount {
   volumeMult: number;
 }
 
+interface ContractSizeInfo {
+  source: number;
+  target: number;
+  ratio: number;
+}
+
 interface TargetState {
   account: TargetAccount;
   mode: CopyMode;
@@ -40,6 +46,7 @@ interface TargetState {
   lastError: string | null;
   lastSyncedAt: number | null;
   log: LogEntry[];
+  contractSizeRatios: Record<string, ContractSizeInfo>;
 }
 
 export interface CopierConfig {
@@ -70,6 +77,47 @@ async function getClient(vpsId: string): Promise<VpsClient> {
   const client = new VpsClient({ ip: vps.ip, apiPort: vps.apiPort });
   clientCache.set(vpsId, { client, cachedAt: Date.now() });
   return client;
+}
+
+// Contract size cache: "vpsId|server|login|symbol" → { contractSize, fetchedAt }
+const CONTRACT_SIZE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const contractSizeCache: Map<string, { contractSize: number; fetchedAt: number }> = new Map();
+
+async function getContractSize(vpsId: string, server: string, login: string, symbol: string): Promise<number | null> {
+  const key = `${vpsId}|${server}|${login}|${symbol}`;
+  const cached = contractSizeCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < CONTRACT_SIZE_CACHE_TTL_MS) {
+    return cached.contractSize;
+  }
+  try {
+    const client = await getClient(vpsId);
+    const info = await client.getSymbolInfo(server, login, symbol);
+    if (info.status === "OK" && info.contract_size) {
+      const cs = parseFloat(info.contract_size);
+      if (!isNaN(cs) && cs > 0) {
+        contractSizeCache.set(key, { contractSize: cs, fetchedAt: Date.now() });
+        return cs;
+      }
+    }
+  } catch {
+    // VPS agent may not support SYMBOL_INFO yet — fall through
+  }
+  return null;
+}
+
+async function getContractSizeRatio(
+  sourceVpsId: string, sourceServer: string, sourceLogin: string,
+  targetVpsId: string, targetServer: string, targetLogin: string,
+  symbol: string
+): Promise<ContractSizeInfo | null> {
+  const [sourceCS, targetCS] = await Promise.all([
+    getContractSize(sourceVpsId, sourceServer, sourceLogin, symbol),
+    getContractSize(targetVpsId, targetServer, targetLogin, symbol),
+  ]);
+  if (sourceCS && targetCS) {
+    return { source: sourceCS, target: targetCS, ratio: sourceCS / targetCS };
+  }
+  return null;
 }
 
 async function persistSession(id: string, config: CopierConfig | null, running: boolean) {
@@ -200,6 +248,7 @@ class CopierSession {
         lastError: null,
         lastSyncedAt: null,
         log: [],
+        contractSizeRatios: {},
       });
       this.addTargetLog(key, "START", `Target initialized: ${t.login}@${t.server} [${mode}] x${t.volumeMult}`);
     }
@@ -399,12 +448,13 @@ class CopierSession {
 
     for (const [ticket, pos] of newTickets) {
       this.log("NEW", `Source: ${pos.type} ${pos.volume} ${pos.symbol} (#${ticket}) -> ${this.targetStates.size} target(s)`);
-      const promises = Array.from(this.targetStates.entries()).map(([key, ts]) => {
-        const volume = Math.floor(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
+      const promises = Array.from(this.targetStates.entries()).map(async ([key, ts]) => {
+        const baseVolume = Math.floor(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
+        const volume = await this.getAdjustedVolume(ts, pos, baseVolume);
         if (volume < 0.01) {
           this.addTargetLog(key, "SKIP", `Volume too small (${volume}) for ${pos.symbol} #${ticket} — min lot is 0.01`);
           ts.mirrors[ticket] = { status: "synced" }; // mark as handled so close works later
-          return Promise.resolve();
+          return;
         }
         return this.copyToTarget(key, ts, ticket, pos, volume);
       });
@@ -444,7 +494,8 @@ class CopierSession {
         const pos = this.sourcePositions[ticket];
         if (!pos) continue; // source position closed — no point retrying
 
-        const volume = Math.floor(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
+        const baseVolume = Math.floor(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
+        const volume = await this.getAdjustedVolume(ts, pos, baseVolume);
         if (volume < 0.01) continue;
 
         this.addTargetLog(key, "RETRY", `Auto-retrying ${pos.symbol} #${ticket}`);
@@ -456,6 +507,34 @@ class CopierSession {
   private resolveTradeType(srcType: string, mode: CopyMode): string {
     if (mode === "follow") return srcType;
     return srcType === "BUY" ? "SELL" : "BUY";
+  }
+
+  private async getAdjustedVolume(ts: TargetState, pos: TrackedPosition, baseVolume: number): Promise<number> {
+    if (!this.config) return baseVolume;
+
+    // Check cached ratio first
+    let csInfo = ts.contractSizeRatios[pos.symbol];
+    if (!csInfo) {
+      const fetched = await getContractSizeRatio(
+        this.config.sourceVpsId, this.config.sourceServer, this.config.sourceLogin,
+        ts.account.vpsId, ts.account.server, ts.account.login,
+        pos.symbol
+      );
+      if (fetched) {
+        ts.contractSizeRatios[pos.symbol] = fetched;
+        csInfo = fetched;
+        if (fetched.ratio !== 1) {
+          this.addTargetLog(
+            Array.from(this.targetStates.entries()).find(([, v]) => v === ts)?.[0] ?? "",
+            "INFO",
+            `Contract size for ${pos.symbol}: source=${fetched.source} target=${fetched.target} ratio=${fetched.ratio.toFixed(2)}x`
+          );
+        }
+      }
+    }
+
+    const ratio = csInfo?.ratio ?? 1;
+    return Math.floor(baseVolume * ratio * 100) / 100;
   }
 
   private async copyToTarget(key: string, ts: TargetState, ticket: string, pos: TrackedPosition, volume: number) {
@@ -547,7 +626,8 @@ class CopierSession {
     const mirror = ts.mirrors[ticket];
     if (!mirror || mirror.status !== "synced") return;
 
-    const closeVolume = Math.floor(sourceReduction * ts.account.volumeMult * 100) / 100;
+    const csRatio = ts.contractSizeRatios[pos.symbol]?.ratio ?? 1;
+    const closeVolume = Math.floor(sourceReduction * ts.account.volumeMult * csRatio * 100) / 100;
     if (closeVolume <= 0) return;
 
     try {
@@ -612,7 +692,7 @@ class CopierSession {
 
     const mode = target.mode ?? "opposite";
     const ts: TargetState = {
-      account: target, mode, mirrors: {}, lastError: null, lastSyncedAt: null, log: [],
+      account: target, mode, mirrors: {}, lastError: null, lastSyncedAt: null, log: [], contractSizeRatios: {},
     };
     this.targetStates.set(key, ts);
     this.config.targets.push(target);
@@ -623,7 +703,8 @@ class CopierSession {
     let synced = 0;
     for (const [ticket, pos] of Object.entries(this.sourcePositions)) {
       if (this.preExistingTickets.has(ticket)) continue; // don't copy pre-existing positions
-      const volume = Math.floor(parseFloat(pos.volume) * target.volumeMult * 100) / 100;
+      const baseVolume = Math.floor(parseFloat(pos.volume) * target.volumeMult * 100) / 100;
+      const volume = await this.getAdjustedVolume(ts, pos, baseVolume);
       if (volume < 0.01) {
         this.addTargetLog(key, "SKIP", `Volume too small (${volume}) for ${pos.symbol} #${ticket}`);
         ts.mirrors[ticket] = { status: "synced" };
@@ -683,7 +764,8 @@ class CopierSession {
     for (const [ticket, mirror] of failedTickets) {
       const pos = this.sourcePositions[ticket];
       if (pos && mirror.status === "failed") {
-        const volume = Math.floor(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
+        const baseVolume = Math.floor(parseFloat(pos.volume) * ts.account.volumeMult * 100) / 100;
+        const volume = await this.getAdjustedVolume(ts, pos, baseVolume);
         await this.copyToTarget(tk, ts, ticket, pos, volume);
         retried++;
       }
@@ -714,6 +796,7 @@ class CopierSession {
         mode: ts.mode, volumeMult: ts.account.volumeMult,
         synced, failed, total: mirrors.length,
         lastError: ts.lastError, lastSyncedAt: ts.lastSyncedAt, log: ts.log.slice(-50),
+        contractSizeRatios: ts.contractSizeRatios,
       };
     });
 
