@@ -95,6 +95,21 @@ void ProcessCommand(string cmd)
       return;
    }
 
+   if(action == "SYMBOL_INFO")
+   {
+      string symbol = (count > 1 && StringLen(parts[1]) > 0) ? parts[1] : "EURUSD";
+      SymbolSelect(symbol, true);
+      double contract_size = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+      if(contract_size <= 0)
+      {
+         WriteResult("ERROR|No info for " + symbol);
+         return;
+      }
+      WriteResult(StringFormat("OK|symbol=%s|contract_size=%.5f",
+         symbol, contract_size));
+      return;
+   }
+
    if(action == "BUY" || action == "SELL")
    {
       if(count < 3)

@@ -50,6 +50,7 @@ interface TargetInfo {
   server: string;
   mode: string;
   volumeMult: number;
+  contractSizeRatios?: Record<string, { source: number; target: number; ratio: number }>;
 }
 
 interface TradesData {
@@ -214,6 +215,11 @@ function TradesPageInner() {
                   {t.mode}
                 </span>
                 <span className="text-[10px] text-zinc-500">x{t.volumeMult}</span>
+                {t.contractSizeRatios && Object.entries(t.contractSizeRatios).filter(([, v]) => v.ratio !== 1).map(([sym, info]) => (
+                  <span key={sym} className="text-[10px] text-amber-400/80" title={`Contract size: source=${info.source} target=${info.target}`}>
+                    CS {info.source}→{info.target} eff. x{(t.volumeMult * info.ratio) % 1 === 0 ? t.volumeMult * info.ratio : (t.volumeMult * info.ratio).toFixed(2)}
+                  </span>
+                ))}
               </div>
             ))}
           </div>

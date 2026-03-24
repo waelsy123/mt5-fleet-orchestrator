@@ -170,6 +170,7 @@ export async function GET(request: NextRequest) {
         server: t.server,
         mode: t.mode,
         volumeMult: t.volumeMult,
+        contractSizeRatios: t.contractSizeRatios,
       })),
       trades,
       totalSourcePositions: sourcePositions.length,
