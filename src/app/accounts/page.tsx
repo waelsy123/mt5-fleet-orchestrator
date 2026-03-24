@@ -27,6 +27,17 @@ interface AccountRow {
   equity: number;
   profit: number;
   connected: boolean;
+  lastSynced: string | null;
+}
+
+function timeAgo(dateStr: string): string {
+  const sec = Math.round((Date.now() - new Date(dateStr).getTime()) / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
 }
 
 export default function AccountsPage() {
@@ -137,13 +148,14 @@ export default function AccountsPage() {
               <TableHead className="text-zinc-400">Equity</TableHead>
               <TableHead className="text-zinc-400">P&L</TableHead>
               <TableHead className="text-zinc-400">Status</TableHead>
+              <TableHead className="text-zinc-400">Last Update</TableHead>
               <TableHead className="text-zinc-400"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow className="border-zinc-700">
-                <TableCell colSpan={8} className="text-center text-zinc-500 py-8">
+                <TableCell colSpan={9} className="text-center text-zinc-500 py-8">
                   {accounts.length === 0
                     ? "No accounts found across any VPS."
                     : "No accounts match your search."}
@@ -178,6 +190,9 @@ export default function AccountsPage() {
                           <Badge className="bg-red-500/20 text-red-500 border-red-500/30">Disconnected</Badge>
                         )}
                       </div>
+                    </TableCell>
+                    <TableCell className="text-xs text-zinc-500">
+                      {account.lastSynced ? timeAgo(account.lastSynced) : "--"}
                     </TableCell>
                     <TableCell>
                       <Button
