@@ -159,6 +159,8 @@ class CopierSession {
   private globalLog: LogEntry[] = [];
   private maxLog = 200;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private pendingReconstruction = false; // retry mirror reconstruction on next polls
+  private reconstructionRetries = 0;
 
   constructor(id: string) {
     this.id = id;
@@ -391,17 +393,34 @@ class CopierSession {
     // On restore, pre-existing tickets that have mirrors are NOT pre-existing —
     // they were copied before the restart. Clear them from the pre-existing set
     // so closes propagate correctly.
+    let totalMirrors = 0;
     for (const ts of this.targetStates.values()) {
       for (const ticket of Object.keys(ts.mirrors)) {
         this.preExistingTickets.delete(ticket);
       }
+      totalMirrors += Object.keys(ts.mirrors).length;
     }
 
-    this.log("RESTORE", `Mirror state reconstructed for ${this.targetStates.size} target(s)`);
+    // If source has positions but we found no mirrors, target may have been offline.
+    // Schedule retry on next polls (up to 5 retries, ~5 seconds apart).
+    const sourceCount = Object.keys(this.sourcePositions).length;
+    if (sourceCount > 0 && totalMirrors === 0 && this.reconstructionRetries < 5) {
+      this.pendingReconstruction = true;
+      this.log("RESTORE", `0 mirrors found for ${sourceCount} source position(s) — will retry reconstruction`);
+    } else {
+      this.pendingReconstruction = false;
+      this.log("RESTORE", `Mirror state reconstructed for ${this.targetStates.size} target(s): ${totalMirrors} mirror(s)`);
+    }
   }
 
   private async poll() {
     if (!this.config || !this.running) return;
+
+    // Retry mirror reconstruction if previous attempt found nothing
+    if (this.pendingReconstruction) {
+      this.reconstructionRetries++;
+      await this.reconstructMirrors();
+    }
 
     let current: Record<string, TrackedPosition>;
     try {
@@ -569,14 +588,13 @@ class CopierSession {
 
   private async closeOnTarget(key: string, ts: TargetState, ticket: string, pos: TrackedPosition) {
     const mirror = ts.mirrors[ticket];
-    if (!mirror) return;
 
     try {
       const client = await getClient(ts.account.vpsId);
       const comment = `copy_${ticket}`;
 
       // If we have the target ticket cached, close by ticket directly
-      if (mirror.targetTicket) {
+      if (mirror?.targetTicket) {
         const result = await client.closeTicket(ts.account.server, ts.account.login, mirror.targetTicket) as Record<string, string>;
         if (result?.status === "OK") {
           ts.mirrors[ticket] = { status: "closed" };
@@ -588,7 +606,9 @@ class CopierSession {
         this.addTargetLog(key, "WARN", `Close ticket #${mirror.targetTicket} failed, searching by comment`);
       }
 
-      // Fallback: find the copied position by comment and close by ticket
+      // Fallback: search target positions for copy_{ticket} comment.
+      // This handles the case where mirror reconstruction missed the position
+      // (e.g. target was offline during restore).
       const positions = await client.getPositions(ts.account.server, ts.account.login);
       const copied = positions.positions?.find(
         (p) => p.comment === comment
@@ -598,7 +618,10 @@ class CopierSession {
         // Position already closed (manually or otherwise) — just mark it
         ts.mirrors[ticket] = { status: "closed" };
         ts.lastSyncedAt = Date.now();
-        this.addTargetLog(key, "CLOSED", `${pos.symbol} already closed on target`);
+        if (mirror) {
+          this.addTargetLog(key, "CLOSED", `${pos.symbol} already closed on target`);
+        }
+        // If no mirror existed, the position was never copied or was pre-existing — silently skip
         return;
       }
 
@@ -607,7 +630,7 @@ class CopierSession {
       if (result?.status === "OK") {
         ts.mirrors[ticket] = { status: "closed" };
         ts.lastSyncedAt = Date.now();
-        this.addTargetLog(key, "CLOSED", `Closed ${pos.symbol} ticket #${targetTicket}`);
+        this.addTargetLog(key, "CLOSED", `Closed ${pos.symbol} ticket #${targetTicket}${!mirror ? " (recovered orphan)" : ""}`);
       } else {
         const err = result?.message ?? result?.raw ?? JSON.stringify(result);
         ts.mirrors[ticket] = { status: "close_failed", error: err, targetTicket: !isNaN(targetTicket) ? targetTicket : undefined };
@@ -616,8 +639,10 @@ class CopierSession {
       }
     } catch (e) {
       const err = String(e);
-      ts.mirrors[ticket] = { status: "close_failed", error: err };
-      ts.lastError = err;
+      if (mirror) {
+        ts.mirrors[ticket] = { status: "close_failed", error: err };
+        ts.lastError = err;
+      }
       this.addTargetLog(key, "ERROR", `Close failed: ${err}`);
     }
   }
