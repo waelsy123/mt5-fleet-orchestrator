@@ -67,10 +67,16 @@ def main():
 
     print("[4/4] Verifying API...")
     import urllib.request
+    import json
     api_up = False
-    for attempt in range(8):
+    api_key = os.environ.get("VPS_API_KEY", "")
+
+    for attempt in range(15):  # up to 45s
         try:
-            resp = urllib.request.urlopen(f"http://{vps_ip}:8000/accounts", timeout=5)
+            req = urllib.request.Request(f"http://{vps_ip}:8000/accounts", method="GET")
+            if api_key:
+                req.add_header("X-Api-Key", api_key)
+            resp = urllib.request.urlopen(req, timeout=5)
             if resp.status == 200:
                 print("  API is running!")
                 api_up = True
@@ -78,30 +84,35 @@ def main():
         except Exception:
             time.sleep(3)
 
-    if api_up:
-        # Now call /ea/update to distribute EA to all terminals
-        print("[+] Distributing EA to terminals via /ea/update...")
+    if not api_up:
+        print("  WARNING: API slow to start — will still attempt EA reload...")
+
+    # Call /ea/update to distribute EA to all terminals (try regardless)
+    print("[+] Distributing EA to terminals via /ea/update...")
+    ea_path = os.path.join(SCRIPT_DIR, "PythonBridge.mq5")
+    with open(ea_path, "r") as f:
+        ea_content = f.read()
+
+    for attempt in range(5):  # retry up to 5 times
         try:
-            ea_path = os.path.join(SCRIPT_DIR, "PythonBridge.mq5")
-            with open(ea_path, "r") as f:
-                ea_content = f.read()
-            import json
             req = urllib.request.Request(
                 f"http://{vps_ip}:8000/ea/update",
                 data=json.dumps({"content": ea_content}).encode(),
                 headers={"Content-Type": "application/json"},
             )
-            api_key = os.environ.get("VPS_API_KEY", "")
             if api_key:
                 req.add_header("X-Api-Key", api_key)
             resp = urllib.request.urlopen(req, timeout=120)
             result = json.loads(resp.read())
             print(f"  EA reloaded: {result.get('reloaded', '?')}/{result.get('total', '?')} terminals")
+            break
         except Exception as e:
-            print(f"  EA reload via API failed: {e}")
-            print("  (Agent updated — EA reload can be triggered manually later)")
-    else:
-        print("  WARNING: API not responding — check VPS manually")
+            if attempt < 4:
+                print(f"  Attempt {attempt+1} failed ({e}), retrying in 5s...")
+                time.sleep(5)
+            else:
+                print(f"  EA reload failed after 5 attempts: {e}")
+                print("  (Agent updated — trigger EA reload manually later)")
 
     client.close()
     print("\nDone!")
